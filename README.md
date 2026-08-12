@@ -22,6 +22,45 @@ A self-hosted reminder dashboard that nags you over Telegram until you tap **✅
 Without `BOT_TOKEN`/`CHAT_ID` the service still boots and logs what it *would*
 have sent — useful for local development.
 
+## Deployment (current)
+
+Runs as CT 108 `reminder` on the Proxmox node **m91p** (Debian 13, unprivileged,
+2 cores / 2 GB / 8 GB, `onboot=1`).
+
+| | |
+|---|---|
+| LAN | `192.168.1.206` |
+| Tailscale | `reminder` — `100.73.241.89` |
+| Public URL | `https://reminder.tail78f4cc.ts.net/` (Tailscale Funnel -> `127.0.0.1:8765`) |
+| Path | `/opt/reminder-service` |
+
+The container needs two non-default LXC settings, both already applied in
+`/etc/pve/lxc/108.conf`:
+
+- `features: nesting=1,keyctl=1` — Docker inside an unprivileged container.
+- a bound `/dev/net/tun` (`lxc.cgroup2.devices.allow: c 10:200 rwm` plus the
+  mount entry) — without it Tailscale cannot create its interface.
+
+Updating a deployed instance:
+
+```bash
+ssh root@192.168.1.206
+cd /opt/reminder-service && git pull
+docker compose build && docker compose up -d --force-recreate
+```
+
+A read-only GitHub deploy key is installed at `/root/.ssh/id_ed25519`, so
+`git pull` works without interactive credentials.
+
+**The dashboard is published to the public internet with no authentication.**
+That is a deliberate choice, made knowingly — anyone with the URL has full
+read/create/delete on your reminders. To make it tailnet-only instead:
+
+```bash
+tailscale funnel --https=443 off
+tailscale serve --bg 8765
+```
+
 ## Behaviour
 
 A reminder is `pending` until acknowledged. Once `due_at` passes, the scheduler
