@@ -19,6 +19,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("reminder")
 
+# python-telegram-bot issues every API call through httpx, which logs the full
+# request URL at INFO — and that URL embeds BOT_TOKEN. Without this the bot
+# token ends up in plain text in `docker compose logs`.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # Load .env for local (non-Docker) runs. Compose supplies the environment
 # itself via env_file, and load_dotenv never overrides an already-set variable,
 # so this is a no-op in the container. Deliberately not in config.py: that
