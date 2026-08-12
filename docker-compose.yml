@@ -1,0 +1,21 @@
+services:
+  reminder-service:
+    build: .
+    container_name: reminder-service
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /data/reminders.db
+      TZ: UTC
+    volumes:
+      - ./data:/data
+    ports:
+      # Host 8765 — port 8000 on this host is already taken by swingbot.
+      - "8765:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
