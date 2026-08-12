@@ -2211,7 +2211,7 @@ sleep 3
 curl -s http://127.0.0.1:8765/api/healthz
 curl -s -X POST http://127.0.0.1:8765/api/reminders \
   -H 'content-type: application/json' \
-  -d '{"title":"smoke test","due_at":"2026-08-12T09:00:00+00:00","retry_interval_min":1,"max_retries":2}'
+  -d "{\"title\":\"smoke test\",\"due_at\":\"$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)\",\"retry_interval_min\":1,\"max_retries\":2}"
 sleep 35
 curl -s http://127.0.0.1:8765/api/reminders
 kill %1
@@ -2654,7 +2654,7 @@ curl -s http://127.0.0.1:8765/api/healthz
 curl -s -o /dev/null -w 'dashboard %{http_code}\n' http://127.0.0.1:8765/
 curl -s -X POST http://127.0.0.1:8765/api/reminders \
   -H 'content-type: application/json' \
-  -d '{"title":"docker smoke","due_at":"2026-08-12T00:00:00+00:00","retry_interval_min":1,"max_retries":2}'
+  -d "{\"title\":\"docker smoke\",\"due_at\":\"$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)\",\"retry_interval_min\":1,\"max_retries\":2}"
 sleep 35
 curl -s http://127.0.0.1:8765/api/reminders
 docker compose logs --no-color | grep 'no telegram'
