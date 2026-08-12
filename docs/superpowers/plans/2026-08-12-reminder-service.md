@@ -809,7 +809,7 @@ def decide(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_logic.py -v`
-Expected: PASS, 13 passed
+Expected: PASS, 12 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1398,7 +1398,7 @@ Expected: PASS, 17 passed
 - [ ] **Step 7: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest -v`
-Expected: PASS, 55 passed
+Expected: PASS, 54 passed
 
 - [ ] **Step 8: Commit**
 
@@ -2191,7 +2191,7 @@ Note that `create_app(db=...)` no longer bypasses the lifespan — the `client` 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest -v`
-Expected: PASS, 80 passed
+Expected: PASS, 79 passed
 
 If `tests/test_api.py` now fails because a `BOT_TOKEN` leaked in from a real `.env`, add this to `tests/conftest.py` to guarantee a clean environment for every test:
 
