@@ -1,1 +1,112 @@
-<!doctype html><title>Reminder Service</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reminders</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%E2%8F%B0%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2f6fed; --pending: #b45309; --acked: #15803d;
+    --expired: #9ca3af; --danger: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f26; --text: #e9ecf1; --muted: #9aa3b2;
+      --line: #2a2f39; --accent: #5b8dff; --pending: #f0b429; --acked: #4ade80;
+      --expired: #6b7280; --danger: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem 1rem 4rem; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 1.25rem; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;
+  }
+  label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: .25rem; }
+  input, textarea, select, button {
+    font: inherit; color: inherit; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 7px; padding: .5rem .6rem; width: 100%;
+  }
+  textarea { resize: vertical; min-height: 3.5rem; }
+  .row { display: flex; gap: .75rem; flex-wrap: wrap; }
+  .row > * { flex: 1 1 10rem; }
+  .field { margin-bottom: .75rem; }
+  button.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    cursor: pointer; font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  .filters { display: flex; gap: .5rem; margin-bottom: .75rem; flex-wrap: wrap; }
+  .filters button { width: auto; cursor: pointer; padding: .35rem .75rem; font-size: .85rem; }
+  .filters button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-left-width: 4px;
+    border-radius: 8px; padding: .75rem .9rem; margin-bottom: .6rem;
+  }
+  .card.pending { border-left-color: var(--pending); }
+  .card.acked { border-left-color: var(--acked); }
+  .card.expired { border-left-color: var(--expired); }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; }
+  .title { font-weight: 600; }
+  .badge { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .note { color: var(--muted); margin: .3rem 0 0; white-space: pre-wrap; }
+  .meta { color: var(--muted); font-size: .8rem; margin-top: .45rem; display: flex;
+          gap: .9rem; flex-wrap: wrap; align-items: center; }
+  .meta button { width: auto; padding: .15rem .5rem; font-size: .75rem; cursor: pointer;
+                 color: var(--danger); border-color: transparent; background: transparent; }
+  .meta button:hover { border-color: var(--danger); }
+  .empty { color: var(--muted); padding: 1rem 0; }
+  #error { color: var(--danger); min-height: 1.2rem; font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Reminders</h1>
+
+  <form class="panel" id="create-form">
+    <div class="field">
+      <label for="title">Title</label>
+      <input id="title" name="title" required maxlength="200" placeholder="Take the bins out">
+    </div>
+    <div class="field">
+      <label for="note">Note (optional)</label>
+      <textarea id="note" name="note" maxlength="2000"></textarea>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="due_at">Due (your local time)</label>
+        <input id="due_at" name="due_at" type="datetime-local" required>
+      </div>
+      <div class="field">
+        <label for="retry_interval_min">Retry every (min)</label>
+        <input id="retry_interval_min" name="retry_interval_min" type="number" min="1" max="1440" value="15">
+      </div>
+      <div class="field">
+        <label for="max_retries">Max sends</label>
+        <input id="max_retries" name="max_retries" type="number" min="1" max="100" value="4">
+      </div>
+    </div>
+    <button class="primary" type="submit">Add reminder</button>
+    <p id="error" role="alert"></p>
+  </form>
+
+  <div class="filters" id="filters">
+    <button data-status="all" aria-pressed="true">All</button>
+    <button data-status="pending" aria-pressed="false">Pending</button>
+    <button data-status="acked" aria-pressed="false">Done</button>
+    <button data-status="expired" aria-pressed="false">Expired</button>
+    <button id="refresh" aria-pressed="false">Refresh</button>
+  </div>
+
+  <div id="list"></div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
