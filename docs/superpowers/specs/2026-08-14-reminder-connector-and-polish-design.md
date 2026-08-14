@@ -17,6 +17,19 @@ Three workstreams, one deploy:
 2. **Recurrence, snooze, timezone, quiet hours** — the functional gaps.
 3. **Dashboard overhaul** — including the missing complete action.
 
+### Sequencing
+
+These are listed by user priority but must be *built* in dependency order, since two of
+them share foundations:
+
+1. **Migration + data model** (§6) — everything else writes to the new columns.
+2. **Service layer extraction** (§5.2) — the shared seam both the REST API and MCP need.
+3. **Time, recurrence, snooze** (§7, §8) — the domain logic, behind the service layer.
+4. **MCP connector** (§5.1, §10) — a thin adapter once 1–3 exist.
+5. **Dashboard** (§12) and **Telegram snooze** (§13) — consume the finished API.
+
+Steps 4 and 5 are independent of each other and can be built in either order.
+
 ## 2. Non-goals
 
 Explicitly deferred by the user to a later iteration:
@@ -309,7 +322,11 @@ Additive and backward-compatible — the existing dashboard keeps working mid-de
 - `POST /api/reminders/{id}/snooze` — new, optional `duration`.
 - `GET /api/reminders/{id}` gains `completions`.
 - `GET /api/config` — new: timezone, default snooze, quiet hours, for the frontend.
-- Read schemas gain `recurrence`, `recur_from`, `snooze_count`, `next_due_at`.
+- Read schemas gain `recurrence`, `recur_from`, and `snooze_count`.
+
+There is deliberately **no** `next_due_at` field. Because recurring reminders roll
+forward in place (§7.3), `due_at` *is* the next occurrence at all times. A second
+"next due" field would be a redundant second source of truth and the two would drift.
 
 ## 12. Dashboard
 
