@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.bot import build_application, send_reminder_message
 from app.config import load_settings
 from app.db import Database
+from app.migrations import migrate
 from app.routers import reminders
 from app.scheduler import build_scheduler, log_sender
 
@@ -82,6 +83,10 @@ def create_app(db: Database | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = db or Database(settings.db_path)
     app.state.db.create_all()
+    # create_all() adds missing tables but never missing columns, so an
+    # existing production database needs this explicit step. A failure here
+    # aborts startup deliberately.
+    migrate(app.state.db.engine)
 
     app.include_router(reminders.router)
     # Mounted last: StaticFiles owns "/" and would otherwise shadow /api.
