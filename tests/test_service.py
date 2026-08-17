@@ -10,9 +10,10 @@ from app.errors import (
     ReminderNotFound,
     ReminderNotPending,
 )
-from app.models import Notification, Reminder, ReminderStatus
+from app.models import Completion, CompletionOutcome, Notification, Reminder, ReminderStatus
 from app.service import (
     ack_reminder,
+    complete_reminder,
     create_reminder,
     delete_reminder,
     find_reply_ack_target,
@@ -253,3 +254,107 @@ def test_search_can_be_narrowed_by_status(session):
     make_reminder(session, title="bins done", status=ReminderStatus.acked.value)
     assert [r.title for r in search_reminders(session, "bins", status="pending")] == \
         ["bins now"]
+
+
+def test_completing_a_one_shot_reminder_is_terminal(session):
+    reminder = make_reminder(session)
+    completed = complete_reminder(session, reminder.id, now=NOW)
+    assert completed.status == ReminderStatus.acked.value
+
+
+def test_completing_writes_a_completion_row(session):
+    due = NOW - timedelta(hours=1)
+    reminder = make_reminder(session, due_at=due)
+    complete_reminder(session, reminder.id, now=NOW)
+
+    row = session.exec(select(Completion)).one()
+    assert row.reminder_id == reminder.id
+    assert row.scheduled_for == due
+    assert row.completed_at == NOW
+    assert row.outcome == CompletionOutcome.completed.value
+
+
+def test_completing_stamps_the_latest_notification(session):
+    reminder = make_reminder(session)
+    session.add(Notification(reminder_id=reminder.id, sent_at=NOW - timedelta(minutes=5)))
+    session.commit()
+
+    complete_reminder(session, reminder.id, now=NOW)
+
+    assert session.exec(select(Notification)).one().acked_at == NOW
+
+
+def test_completing_a_recurring_reminder_rolls_it_forward_in_place(session):
+    reminder = make_reminder(
+        session, due_at=datetime(2026, 8, 15, 9, 0), recurrence="FREQ=DAILY"
+    )
+    rolled = complete_reminder(session, reminder.id, now=NOW)
+
+    assert rolled.status == ReminderStatus.pending.value
+    assert rolled.due_at == datetime(2026, 8, 16, 9, 0)
+
+
+def test_roll_forward_resets_the_per_occurrence_counters(session):
+    reminder = make_reminder(
+        session,
+        due_at=datetime(2026, 8, 15, 9, 0),
+        recurrence="FREQ=DAILY",
+        retry_count=3,
+        last_sent_at=NOW - timedelta(minutes=20),
+        snooze_count=2,
+    )
+    rolled = complete_reminder(session, reminder.id, now=NOW)
+
+    assert rolled.retry_count == 0
+    assert rolled.last_sent_at is None
+    assert rolled.snooze_count == 0
+
+
+def test_roll_forward_records_the_occurrence_that_was_resolved(session):
+    """due_at is overwritten in place, so the completions row is the only
+    surviving record of the occurrence."""
+    due = datetime(2026, 8, 15, 9, 0)
+    reminder = make_reminder(session, due_at=due, recurrence="FREQ=DAILY")
+    complete_reminder(session, reminder.id, now=NOW)
+    assert session.exec(select(Completion)).one().scheduled_for == due
+
+
+def test_completion_anchored_recurrence_counts_from_now(session):
+    reminder = make_reminder(
+        session,
+        due_at=datetime(2026, 8, 10, 9, 0),
+        recurrence="FREQ=DAILY;INTERVAL=3",
+        recur_from="completion",
+    )
+    rolled = complete_reminder(session, reminder.id, now=NOW)
+    assert rolled.due_at == NOW + timedelta(days=3)
+
+
+def test_completing_an_unknown_reminder_raises(session):
+    with pytest.raises(ReminderNotFound):
+        complete_reminder(session, 999, now=NOW)
+
+
+def test_completing_an_already_acked_reminder_raises(session):
+    reminder = make_reminder(session, status=ReminderStatus.acked.value)
+    with pytest.raises(ReminderNotPending, match="acked"):
+        complete_reminder(session, reminder.id, now=NOW)
+
+
+def test_telegram_ack_rolls_a_series_forward_too(session):
+    """The bot's ack path must not be a second, divergent implementation."""
+    reminder = make_reminder(
+        session, due_at=datetime(2026, 8, 15, 9, 0), recurrence="FREQ=DAILY"
+    )
+    assert ack_reminder(session, reminder.id, now=NOW) is True
+    session.refresh(reminder)
+    assert reminder.status == ReminderStatus.pending.value
+    assert reminder.due_at == datetime(2026, 8, 16, 9, 0)
+
+
+def test_ack_still_returns_false_instead_of_raising(session):
+    """Double-taps on the inline button must stay harmless."""
+    reminder = make_reminder(session)
+    assert ack_reminder(session, reminder.id, now=NOW) is True
+    assert ack_reminder(session, reminder.id, now=NOW) is False
+    assert ack_reminder(session, 999, now=NOW) is False

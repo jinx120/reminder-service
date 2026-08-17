@@ -11,7 +11,7 @@ from app.errors import (
     ServiceError,
     SnoozeLimitReached,
 )
-from app.logic import validate_recurrence
+from app.logic import next_occurrence, validate_recurrence
 from app.models import Completion, CompletionOutcome, Notification, Reminder, ReminderStatus
 from app.timeutil import parse_when, to_utc_naive, utcnow
 
@@ -23,6 +23,7 @@ __all__ = [
     "MUTABLE_FIELDS", "create_reminder", "list_reminders", "get_reminder",
     "update_reminder", "delete_reminder", "search_reminders",
     "latest_notification", "ack_reminder", "find_reply_ack_target", "record_send",
+    "complete_reminder",
 ]
 
 MUTABLE_FIELDS = frozenset({
@@ -175,6 +176,82 @@ def search_reminders(
     return list(session.exec(statement).all())
 
 
+def _stamp_latest_notification(session: Session, reminder_id: int, now: datetime) -> None:
+    notification = latest_notification(session, reminder_id)
+    if notification is not None and notification.acked_at is None:
+        notification.acked_at = now
+        session.add(notification)
+
+
+def _resolve_occurrence(
+    session: Session,
+    reminder: Reminder,
+    *,
+    outcome: str,
+    resolved_at: datetime,
+    tz: str,
+    terminal_status: str,
+) -> None:
+    """Close out one occurrence, rolling a series forward if there is one.
+
+    Does not commit — the caller owns the transaction boundary, which is what
+    lets the scheduler resolve several reminders in a single tick.
+    """
+    session.add(
+        Completion(
+            reminder_id=reminder.id,
+            scheduled_for=reminder.due_at,
+            completed_at=resolved_at,
+            outcome=outcome,
+        )
+    )
+
+    if reminder.recurrence is None:
+        reminder.status = terminal_status
+        session.add(reminder)
+        return
+
+    reminder.due_at = next_occurrence(
+        rule=reminder.recurrence,
+        recur_from=reminder.recur_from,
+        previous_due=reminder.due_at,
+        resolved_at=resolved_at,
+        now=resolved_at,
+        tz=tz,
+    )
+    reminder.status = ReminderStatus.pending.value
+    reminder.retry_count = 0
+    reminder.last_sent_at = None
+    reminder.snooze_count = 0
+    session.add(reminder)
+
+
+def complete_reminder(
+    session: Session,
+    reminder_id: int,
+    *,
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> Reminder:
+    """Mark an occurrence done. A recurring reminder rolls forward in place."""
+    now = now or utcnow()
+    reminder = get_reminder(session, reminder_id)
+    _require_pending(reminder)
+
+    _stamp_latest_notification(session, reminder_id, now)
+    _resolve_occurrence(
+        session,
+        reminder,
+        outcome=CompletionOutcome.completed.value,
+        resolved_at=now,
+        tz=tz,
+        terminal_status=ReminderStatus.acked.value,
+    )
+    session.commit()
+    session.refresh(reminder)
+    return reminder
+
+
 def latest_notification(session: Session, reminder_id: int) -> Notification | None:
     """The most recent notification sent for a reminder, if any."""
     return session.exec(
@@ -184,27 +261,22 @@ def latest_notification(session: Session, reminder_id: int) -> Notification | No
     ).first()
 
 
-def ack_reminder(session: Session, reminder_id: int, *, now: datetime | None = None) -> bool:
-    """Mark a pending reminder acknowledged.
+def ack_reminder(
+    session: Session,
+    reminder_id: int,
+    *,
+    now: datetime | None = None,
+    tz: str = "UTC",
+) -> bool:
+    """Telegram's completion path: complete_reminder with a boolean result.
 
-    Returns False (and changes nothing) if the reminder is unknown or has
-    already been acked or expired, which makes double-taps on the inline
-    button harmless.
+    Returns False (and changes nothing) if the reminder is unknown or already
+    resolved, which makes double-taps on the inline button harmless.
     """
-    now = now or utcnow()
-    reminder = session.get(Reminder, reminder_id)
-    if reminder is None or reminder.status != ReminderStatus.pending.value:
+    try:
+        complete_reminder(session, reminder_id, tz=tz, now=now)
+    except (ReminderNotFound, ReminderNotPending):
         return False
-
-    reminder.status = ReminderStatus.acked.value
-    session.add(reminder)
-
-    notification = latest_notification(session, reminder_id)
-    if notification is not None and notification.acked_at is None:
-        notification.acked_at = now
-        session.add(notification)
-
-    session.commit()
     return True
 
 
