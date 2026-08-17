@@ -99,12 +99,18 @@ async def lifespan(app: FastAPI):
     db: Database = app.state.db
 
     if settings.bot_enabled:
-        telegram_app = build_application(settings.bot_token, settings.chat_id, db)
+        telegram_app = build_application(settings, db)
         await telegram_app.initialize()
         await telegram_app.start()
         # drop_pending_updates avoids replaying stale taps from while we were down.
         await telegram_app.updater.start_polling(drop_pending_updates=True)
-        sender = partial(send_reminder_message, telegram_app.bot, settings.chat_id)
+        sender = partial(
+            send_reminder_message,
+            telegram_app.bot,
+            settings.chat_id,
+            tz=settings.timezone,
+            snooze_min=settings.default_snooze_min,
+        )
         app.state.tg = telegram_app
         logger.info("telegram bot polling; authorised chat id %s", settings.chat_id)
     else:
