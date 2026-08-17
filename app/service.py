@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlmodel import Session, or_, select
 
@@ -13,7 +13,14 @@ from app.errors import (
 )
 from app.logic import next_occurrence, validate_recurrence
 from app.models import Completion, CompletionOutcome, Notification, Reminder, ReminderStatus
-from app.timeutil import parse_when, to_utc_naive, utcnow
+from app.timeutil import (
+    from_local_naive,
+    parse_duration_minutes,
+    parse_when,
+    to_local_naive,
+    to_utc_naive,
+    utcnow,
+)
 
 # Re-exported so adapters can `from app.service import ReminderNotFound`
 # without needing to know the errors live in their own module.
@@ -23,7 +30,7 @@ __all__ = [
     "MUTABLE_FIELDS", "create_reminder", "list_reminders", "get_reminder",
     "update_reminder", "delete_reminder", "search_reminders",
     "latest_notification", "ack_reminder", "find_reply_ack_target", "record_send",
-    "complete_reminder",
+    "complete_reminder", "snooze_reminder", "expire_reminder", "due_digest",
 ]
 
 MUTABLE_FIELDS = frozenset({
@@ -317,3 +324,111 @@ def record_send(
     reminder.retry_count += 1
     reminder.last_sent_at = now
     session.add(reminder)
+
+
+def snooze_reminder(
+    session: Session,
+    reminder_id: int,
+    *,
+    duration: str | None = None,
+    default_minutes: int = 15,
+    max_snoozes: int = 20,
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> Reminder:
+    """Push a pending reminder's due time forward. Status stays pending.
+
+    `duration` accepts a shorthand ("30m", "2h") or an absolute phrase
+    ("tomorrow at 9am"). Omitted, it uses `default_minutes`.
+    """
+    now = now or utcnow()
+    reminder = get_reminder(session, reminder_id)
+    _require_pending(reminder)
+
+    if reminder.snooze_count >= max_snoozes:
+        raise SnoozeLimitReached(
+            f"Reminder {reminder_id} has already been snoozed {reminder.snooze_count} "
+            f"times (limit {max_snoozes})"
+        )
+
+    if duration is None:
+        new_due = now + timedelta(minutes=default_minutes)
+    else:
+        minutes = parse_duration_minutes(duration)
+        new_due = (
+            now + timedelta(minutes=minutes)
+            if minutes is not None
+            else parse_when(duration, tz=tz, now=now)
+        )
+    if new_due <= now:
+        raise InvalidTime(f"Snooze target {duration!r} is not in the future")
+
+    reminder.due_at = new_due
+    reminder.retry_count = 0
+    reminder.last_sent_at = None
+    reminder.snooze_count += 1
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    return reminder
+
+
+def expire_reminder(
+    session: Session, reminder: Reminder, *, now: datetime, tz: str = "UTC"
+) -> None:
+    """Retry budget exhausted. A recurring series rolls forward instead of dying.
+
+    Does not commit — the scheduler resolves a whole tick in one transaction.
+    """
+    _resolve_occurrence(
+        session,
+        reminder,
+        outcome=CompletionOutcome.expired.value,
+        resolved_at=now,
+        tz=tz,
+        terminal_status=ReminderStatus.expired.value,
+    )
+
+
+def _end_of_local_day(now: datetime, tz: str) -> datetime:
+    local = to_local_naive(now, tz)
+    return from_local_naive(
+        local.replace(hour=23, minute=59, second=59, microsecond=999999), tz
+    )
+
+
+def _resolve_horizon(window: str, *, now: datetime, tz: str, end_of_today: datetime) -> datetime:
+    named = {
+        "today": end_of_today,
+        "tomorrow": end_of_today + timedelta(days=1),
+        "week": now + timedelta(days=7),
+        "all": now + timedelta(days=3650),
+    }
+    if window.strip().lower() in named:
+        return named[window.strip().lower()]
+    return parse_when(window, tz=tz, now=now)
+
+
+def due_digest(
+    session: Session,
+    *,
+    window: str = "today",
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> dict:
+    """Pending work split into overdue / due today / upcoming.
+
+    Day boundaries follow `tz`, not UTC, so "today" means the user's today.
+    """
+    now = now or utcnow()
+    end_of_today = _end_of_local_day(now, tz)
+    horizon = _resolve_horizon(window, now=now, tz=tz, end_of_today=end_of_today)
+
+    pending = list_reminders(session, status=ReminderStatus.pending.value)
+    return {
+        "now": now,
+        "horizon": horizon,
+        "overdue": [r for r in pending if r.due_at < now],
+        "due_today": [r for r in pending if now <= r.due_at <= end_of_today],
+        "upcoming": [r for r in pending if end_of_today < r.due_at <= horizon],
+    }

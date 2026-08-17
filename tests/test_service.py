@@ -9,6 +9,7 @@ from app.errors import (
     InvalidTime,
     ReminderNotFound,
     ReminderNotPending,
+    SnoozeLimitReached,
 )
 from app.models import Completion, CompletionOutcome, Notification, Reminder, ReminderStatus
 from app.service import (
@@ -16,12 +17,15 @@ from app.service import (
     complete_reminder,
     create_reminder,
     delete_reminder,
+    due_digest,
+    expire_reminder,
     find_reply_ack_target,
     get_reminder,
     latest_notification,
     list_reminders,
     record_send,
     search_reminders,
+    snooze_reminder,
     update_reminder,
 )
 
@@ -358,3 +362,138 @@ def test_ack_still_returns_false_instead_of_raising(session):
     assert ack_reminder(session, reminder.id, now=NOW) is True
     assert ack_reminder(session, reminder.id, now=NOW) is False
     assert ack_reminder(session, 999, now=NOW) is False
+
+
+def test_snooze_without_a_duration_uses_the_default(session):
+    reminder = make_reminder(session)
+    snoozed = snooze_reminder(session, reminder.id, default_minutes=15, now=NOW)
+    assert snoozed.due_at == NOW + timedelta(minutes=15)
+
+
+def test_snooze_accepts_a_duration_shorthand(session):
+    reminder = make_reminder(session)
+    assert snooze_reminder(session, reminder.id, duration="2h", now=NOW).due_at == \
+        NOW + timedelta(hours=2)
+
+
+def test_snooze_accepts_an_absolute_phrase(session):
+    reminder = make_reminder(session)
+    assert snooze_reminder(session, reminder.id, duration="in 45 minutes", now=NOW).due_at == \
+        NOW + timedelta(minutes=45)
+
+
+def test_snooze_stays_pending_and_resets_the_send_counters(session):
+    reminder = make_reminder(session, retry_count=3, last_sent_at=NOW - timedelta(minutes=5))
+    snoozed = snooze_reminder(session, reminder.id, now=NOW)
+    assert snoozed.status == ReminderStatus.pending.value
+    assert snoozed.retry_count == 0
+    assert snoozed.last_sent_at is None
+
+
+def test_snooze_increments_the_counter(session):
+    reminder = make_reminder(session)
+    assert snooze_reminder(session, reminder.id, now=NOW).snooze_count == 1
+    assert snooze_reminder(session, reminder.id, now=NOW).snooze_count == 2
+
+
+def test_snooze_is_capped(session):
+    """Without a cap a reminder can be deferred forever, which is the same as
+    losing it silently."""
+    reminder = make_reminder(session, snooze_count=3)
+    with pytest.raises(SnoozeLimitReached, match="3"):
+        snooze_reminder(session, reminder.id, max_snoozes=3, now=NOW)
+
+
+def test_snooze_rejects_a_target_in_the_past(session):
+    reminder = make_reminder(session)
+    with pytest.raises(InvalidTime, match="future"):
+        snooze_reminder(session, reminder.id, duration="2026-01-01T00:00:00Z", now=NOW)
+
+
+def test_snooze_rejects_gibberish(session):
+    reminder = make_reminder(session)
+    with pytest.raises(InvalidTime):
+        snooze_reminder(session, reminder.id, duration="in a bit", now=NOW)
+
+
+def test_snooze_refuses_a_resolved_reminder(session):
+    reminder = make_reminder(session, status=ReminderStatus.expired.value)
+    with pytest.raises(ReminderNotPending):
+        snooze_reminder(session, reminder.id, now=NOW)
+
+
+def test_expiring_a_one_shot_reminder_is_terminal(session):
+    reminder = make_reminder(session)
+    expire_reminder(session, reminder, now=NOW)
+    session.commit()
+    session.refresh(reminder)
+    assert reminder.status == ReminderStatus.expired.value
+    assert session.exec(select(Completion)).one().outcome == CompletionOutcome.expired.value
+
+
+def test_expiring_a_recurring_reminder_rolls_the_series_forward(session):
+    """A single missed occurrence must not silently kill the series — that is
+    the failure mode most likely to erode trust in the tool."""
+    reminder = make_reminder(
+        session, due_at=datetime(2026, 8, 15, 9, 0), recurrence="FREQ=DAILY"
+    )
+    expire_reminder(session, reminder, now=NOW)
+    session.commit()
+    session.refresh(reminder)
+
+    assert reminder.status == ReminderStatus.pending.value
+    assert reminder.due_at == datetime(2026, 8, 16, 9, 0)
+    assert reminder.retry_count == 0
+    assert session.exec(select(Completion)).one().outcome == CompletionOutcome.expired.value
+
+
+def test_expire_reminder_does_not_commit(session):
+    reminder = make_reminder(session)
+    expire_reminder(session, reminder, now=NOW)
+    session.rollback()
+    session.refresh(reminder)
+    assert reminder.status == ReminderStatus.pending.value
+
+
+def test_digest_buckets_by_overdue_today_and_upcoming(session):
+    make_reminder(session, title="late", due_at=NOW - timedelta(hours=3))
+    make_reminder(session, title="later today", due_at=NOW + timedelta(hours=3))
+    make_reminder(session, title="thursday", due_at=NOW + timedelta(days=3))
+
+    digest = due_digest(session, window="week", now=NOW)
+
+    assert [r.title for r in digest["overdue"]] == ["late"]
+    assert [r.title for r in digest["due_today"]] == ["later today"]
+    assert [r.title for r in digest["upcoming"]] == ["thursday"]
+
+
+def test_digest_default_window_stops_at_the_end_of_today(session):
+    make_reminder(session, title="thursday", due_at=NOW + timedelta(days=3))
+    assert due_digest(session, now=NOW)["upcoming"] == []
+
+
+def test_digest_window_accepts_a_phrase(session):
+    make_reminder(session, title="thursday", due_at=NOW + timedelta(days=3))
+    assert [r.title for r in due_digest(session, window="in 4 days", now=NOW)["upcoming"]] == \
+        ["thursday"]
+
+
+def test_digest_excludes_resolved_reminders(session):
+    make_reminder(session, title="done", due_at=NOW - timedelta(hours=3),
+                  status=ReminderStatus.acked.value)
+    assert due_digest(session, window="week", now=NOW)["overdue"] == []
+
+
+def test_digest_day_boundary_follows_the_configured_zone(session):
+    """23:00 UTC is already tomorrow in Auckland, so nothing is "today".
+
+    Auckland's local "today" ends at 2026-08-16 11:59:59.999999 UTC (23:00 UTC
+    on the 15th is already 2026-08-16 11:00 local). "soon" is due after that
+    local day boundary but still within the week window, so it must land in
+    upcoming, not due_today.
+    """
+    now = datetime(2026, 8, 15, 23, 0)
+    make_reminder(session, title="soon", due_at=now + timedelta(hours=13))
+    digest = due_digest(session, window="week", tz="Pacific/Auckland", now=now)
+    assert [r.title for r in digest["upcoming"]] == ["soon"]
+    assert digest["due_today"] == []
