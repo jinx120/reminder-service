@@ -98,3 +98,51 @@ def test_duration_shorthand(text, expected):
 @pytest.mark.parametrize("text", ["tomorrow at 9am", "", "banana"])
 def test_non_durations_return_none_for_the_caller_to_fall_back(text):
     assert parse_duration_minutes(text) is None
+
+
+# America/New_York DST transitions in 2026:
+#   spring-forward gap: 2026-03-08 02:00 -> 03:00 (02:00-02:59:59 does not exist)
+#   fall-back overlap:  2026-11-01 02:00 -> 01:00 (01:00-01:59:59 happens twice)
+NEW_YORK = "America/New_York"
+NONEXISTENT_LOCAL = datetime(2026, 3, 8, 2, 30, 0)
+AMBIGUOUS_LOCAL = datetime(2026, 11, 1, 1, 30, 0)
+
+
+def test_from_local_naive_default_is_total_for_nonexistent_time():
+    """Non-strict is what the scheduler relies on: never raises, even when
+    the local wall clock falls in a spring-forward gap."""
+    result = from_local_naive(NONEXISTENT_LOCAL, NEW_YORK)
+    assert result == datetime(2026, 3, 8, 7, 30, 0)
+
+
+def test_from_local_naive_default_is_total_for_ambiguous_time():
+    """Non-strict is what the scheduler relies on: never raises, even when
+    the local wall clock is ambiguous across a fall-back."""
+    result = from_local_naive(AMBIGUOUS_LOCAL, NEW_YORK)
+    assert result == datetime(2026, 11, 1, 5, 30, 0)
+
+
+def test_from_local_naive_strict_raises_for_nonexistent_time():
+    with pytest.raises(InvalidTime):
+        from_local_naive(NONEXISTENT_LOCAL, NEW_YORK, strict=True)
+
+
+def test_from_local_naive_strict_raises_for_ambiguous_time():
+    with pytest.raises(InvalidTime):
+        from_local_naive(AMBIGUOUS_LOCAL, NEW_YORK, strict=True)
+
+
+def test_parse_when_raises_for_naive_iso_in_a_spring_forward_gap():
+    with pytest.raises(InvalidTime):
+        parse_when("2026-03-08T02:30:00", tz=NEW_YORK, now=NOW)
+
+
+def test_parse_when_raises_for_naive_iso_in_a_fall_back_overlap():
+    with pytest.raises(InvalidTime):
+        parse_when("2026-11-01T01:30:00", tz=NEW_YORK, now=NOW)
+
+
+def test_parse_when_still_parses_an_ordinary_naive_iso_time_in_the_same_zone():
+    """Guards against the strict DST check firing on ordinary input."""
+    assert parse_when("2026-06-15T10:00:00", tz=NEW_YORK, now=NOW) == \
+        datetime(2026, 6, 15, 14, 0, 0)

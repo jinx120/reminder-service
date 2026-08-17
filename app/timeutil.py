@@ -55,9 +55,39 @@ def to_local_naive(dt: datetime, tz: str) -> datetime:
     return dt.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(tz)).replace(tzinfo=None)
 
 
-def from_local_naive(dt: datetime, tz: str) -> datetime:
-    """Naive wall clock in `tz` -> stored naive UTC."""
-    return dt.replace(tzinfo=ZoneInfo(tz)).astimezone(timezone.utc).replace(tzinfo=None)
+def from_local_naive(dt: datetime, tz: str, *, strict: bool = False) -> datetime:
+    """Naive wall clock in `tz` -> stored naive UTC.
+
+    Non-strict (the default): total, matching zoneinfo's fold=0 default — an
+    ambiguous fall-back time resolves to its earlier occurrence, and a
+    nonexistent spring-forward time is extrapolated straight through the
+    gap. Never raises. This is what scheduler-computed times (recurrence,
+    snooze) rely on, so a job crossing a DST boundary shifts predictably
+    once a year instead of crashing the scheduler loop.
+
+    Strict: raises InvalidTime instead of silently picking a side when `dt`
+    is ambiguous or does not exist in `tz`. Used at the user-input boundary
+    in parse_when.
+    """
+    zone = ZoneInfo(tz)
+    fold0 = dt.replace(tzinfo=zone, fold=0).astimezone(timezone.utc).replace(tzinfo=None)
+    if not strict:
+        return fold0
+
+    fold1 = dt.replace(tzinfo=zone, fold=1).astimezone(timezone.utc).replace(tzinfo=None)
+    if fold0 == fold1:
+        return fold0
+
+    if to_local_naive(fold0, tz) != dt:
+        raise InvalidTime(
+            f"{dt.isoformat()} does not exist in {tz} — clocks skip this time "
+            "for a DST spring-forward transition. Pick a time before or after the gap."
+        )
+    raise InvalidTime(
+        f"{dt.isoformat()} is ambiguous in {tz} — a DST fall-back means this "
+        f"wall-clock time occurs twice, at {fold0.isoformat()}Z or {fold1.isoformat()}Z UTC. "
+        "Use an explicit UTC offset to disambiguate."
+    )
 
 
 def as_local_iso(dt: datetime | None, tz: str) -> str | None:
@@ -86,7 +116,7 @@ def parse_when(text: str, *, tz: str, now: datetime | None = None) -> datetime:
     except ValueError:
         pass
     else:
-        return to_utc_naive(parsed) if parsed.tzinfo else from_local_naive(parsed, tz)
+        return to_utc_naive(parsed) if parsed.tzinfo else from_local_naive(parsed, tz, strict=True)
 
     normalised = _NEXT_WEEKDAY.sub(r"\1", text)
     parsed = dateparser.parse(
