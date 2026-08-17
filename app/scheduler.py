@@ -38,6 +38,17 @@ async def tick(
     counters, so the next tick retries it rather than burning an attempt.
     A reminder whose recurrence rule cannot be computed is likewise left
     untouched. One bad reminder never blocks the others.
+
+    Each reminder's successful work is committed immediately, right after
+    `record_send` or `expire_reminder` returns — not batched behind the rest
+    of the tick. A `Notification` row and updated counters only ever follow
+    an already-delivered `await sender(reminder)`, and that Telegram send
+    can never be undone. If a later reminder in the same tick then hits a
+    broken recurrence rule and `expire_reminder` raises, `session.rollback()`
+    must only discard that failing reminder's own partial work — never an
+    earlier reminder's already-committed send. Rolling back a delivered
+    send would make the next tick see stale counters and re-send it,
+    producing a duplicate nag.
     """
     now = now_fn()
     local_now = to_local_naive(now, settings.timezone)
@@ -72,6 +83,7 @@ async def tick(
                     )
                     continue
                 record_send(session, reminder, now=now, message_id=message_id)
+                session.commit()
                 logger.info(
                     "sent reminder %s (%s), attempt %s/%s",
                     reminder.id,
@@ -91,6 +103,7 @@ async def tick(
                     )
                     session.rollback()
                     continue
+                session.commit()
                 logger.info(
                     "resolved reminder %s (%s) after %s attempts; now %s, due %s",
                     reminder.id,

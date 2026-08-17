@@ -256,3 +256,44 @@ async def test_a_broken_recurrence_rule_does_not_abort_the_tick(db, settings):
 
     assert sender.sent == [fine_id]
     assert load(db, broken_id).status == ReminderStatus.pending.value
+
+
+async def test_a_send_earlier_in_the_tick_survives_a_later_rollback(db, settings):
+    """A reminder that is sent successfully earlier in the tick must keep its
+    send bookkeeping even if a later reminder in the same tick hits a broken
+    recurrence rule and triggers session.rollback(). The Telegram message was
+    already delivered and cannot be un-sent, so rolling back the delivered
+    reminder's `record_send` work would make the next tick send it again —
+    a duplicate nag. Only the broken reminder's own partial work may be
+    discarded.
+
+    `sent_id` is added before `broken_id`, mirroring how
+    `test_a_broken_recurrence_rule_does_not_abort_the_tick` controls
+    ordering: absent an ORDER BY, the query returns pending reminders in
+    insertion order, so `sent_id` is processed (and sent) first."""
+    now = datetime(2026, 8, 15, 12, 0)
+    sent_id = add(db, title="sent", due_at=datetime(2026, 8, 15, 9, 0))
+    broken_id = add(
+        db,
+        title="broken",
+        due_at=datetime(2026, 8, 15, 9, 0),
+        recurrence="FREQ=NONSENSE",
+        retry_count=4,
+        max_retries=4,
+        last_sent_at=now - timedelta(hours=2),
+    )
+    sender = FakeSender()
+
+    await tick(db, sender, settings=settings, now_fn=lambda: now)
+
+    assert sender.sent == [sent_id]
+    sent = load(db, sent_id)
+    assert sent.retry_count == 1
+    assert sent.last_sent_at == now
+    with db.session() as s:
+        notification = s.exec(select(Notification)).one()
+    assert notification.reminder_id == sent_id
+
+    broken = load(db, broken_id)
+    assert broken.status == ReminderStatus.pending.value
+    assert broken.retry_count == 4
