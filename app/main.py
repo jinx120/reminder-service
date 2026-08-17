@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.routing import Route
 
 from app.bot import build_application, send_reminder_message
 from app.config import load_settings
@@ -20,6 +23,7 @@ from app.errors import (
     ServiceError,
     SnoozeLimitReached,
 )
+from app.mcp_server import build_mcp
 from app.migrations import migrate
 from app.routers import reminders
 from app.scheduler import build_scheduler, log_sender
@@ -65,6 +69,30 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
 
+def mount_mcp(app: FastAPI) -> None:
+    """Register the MCP connector at exactly /mcp.
+
+    streamable_http_app() is called only for its side effect: it constructs
+    mcp.session_manager, which the ASGI app below needs. DNS-rebinding
+    protection must be off or every request — TestClient and Funnel alike —
+    is rejected with 421 for an "invalid" Host header.
+
+    A Route, not a Mount: Mount never matches its bare prefix, so /mcp would
+    307 to /mcp/ and the connector URL would depend on a trailing slash.
+    """
+    mcp = build_mcp(app.state.db, app.state.settings)
+    mcp.streamable_http_app(
+        streamable_http_path="/",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+    )
+    app.state.mcp = mcp
+    app.router.routes.append(
+        Route("/mcp", endpoint=StreamableHTTPASGIApp(mcp.session_manager))
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = app.state.settings
@@ -93,7 +121,12 @@ async def lifespan(app: FastAPI):
     logger.info("scheduler started, ticking every %ss", settings.tick_seconds)
 
     try:
-        yield
+        if app.state.mcp is not None:
+            async with app.state.mcp.session_manager.run():
+                logger.info("MCP connector mounted at /mcp")
+                yield
+        else:
+            yield
     finally:
         scheduler.shutdown(wait=False)
         if app.state.tg is not None:
@@ -121,7 +154,12 @@ def create_app(db: Database | None = None) -> FastAPI:
 
     register_error_handlers(app)
     app.include_router(reminders.router)
-    # Mounted last: StaticFiles owns "/" and would otherwise shadow /api.
+    if settings.mcp_enabled:
+        mount_mcp(app)
+    else:
+        app.state.mcp = None
+        logger.warning("MCP_ENABLED is false — the /mcp connector is not mounted")
+    # Mounted last: StaticFiles owns "/" and would otherwise shadow /api and /mcp.
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
 
