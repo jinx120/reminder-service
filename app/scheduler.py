@@ -5,11 +5,12 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlmodel import select
 
+from app.config import Settings
 from app.db import Database
 from app.logic import Action, decide
 from app.models import Reminder, ReminderStatus
-from app.service import record_send
-from app.timeutil import utcnow
+from app.service import expire_reminder, record_send
+from app.timeutil import to_local_naive, utcnow
 
 logger = logging.getLogger("reminder.scheduler")
 
@@ -28,15 +29,19 @@ async def tick(
     db: Database,
     sender: Sender,
     *,
+    settings: Settings,
     now_fn: Callable[[], datetime] = utcnow,
 ) -> None:
     """One scheduler pass: send what is due, expire what is spent.
 
     A failing send is logged and skipped without touching that reminder's
     counters, so the next tick retries it rather than burning an attempt.
-    One bad reminder never blocks the others.
+    A reminder whose recurrence rule cannot be computed is likewise left
+    untouched. One bad reminder never blocks the others.
     """
     now = now_fn()
+    local_now = to_local_naive(now, settings.timezone)
+
     with db.session() as session:
         pending = session.exec(
             select(Reminder).where(Reminder.status == ReminderStatus.pending.value)
@@ -51,6 +56,9 @@ async def tick(
                 retry_interval_min=reminder.retry_interval_min,
                 max_retries=reminder.max_retries,
                 now=now,
+                local_now=local_now,
+                quiet_start=settings.quiet_hours_start,
+                quiet_end=settings.quiet_hours_end,
             )
 
             if action is Action.SEND:
@@ -73,19 +81,29 @@ async def tick(
                 )
 
             elif action is Action.EXPIRE:
-                reminder.status = ReminderStatus.expired.value
-                session.add(reminder)
+                try:
+                    expire_reminder(session, reminder, now=now, tz=settings.timezone)
+                except Exception:
+                    logger.exception(
+                        "could not resolve reminder %s (%s); leaving it untouched",
+                        reminder.id,
+                        reminder.title,
+                    )
+                    session.rollback()
+                    continue
                 logger.info(
-                    "expired reminder %s (%s) after %s attempts",
+                    "resolved reminder %s (%s) after %s attempts; now %s, due %s",
                     reminder.id,
                     reminder.title,
                     reminder.retry_count,
+                    reminder.status,
+                    reminder.due_at,
                 )
 
         session.commit()
 
 
-def build_scheduler(db: Database, sender: Sender, tick_seconds: int) -> AsyncIOScheduler:
+def build_scheduler(db: Database, sender: Sender, settings: Settings) -> AsyncIOScheduler:
     """An AsyncIOScheduler that runs `tick` on the app's own event loop.
 
     max_instances=1 plus coalesce=True mean a slow tick can never overlap
@@ -95,8 +113,9 @@ def build_scheduler(db: Database, sender: Sender, tick_seconds: int) -> AsyncIOS
     scheduler.add_job(
         tick,
         trigger="interval",
-        seconds=tick_seconds,
+        seconds=settings.tick_seconds,
         args=[db, sender],
+        kwargs={"settings": settings},
         id="reminder-tick",
         max_instances=1,
         coalesce=True,

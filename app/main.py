@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
             "reminders will be logged instead of sent"
         )
 
-    scheduler = build_scheduler(db, sender, settings.tick_seconds)
+    scheduler = build_scheduler(db, sender, settings)
     scheduler.start()
     app.state.scheduler = scheduler
     logger.info("scheduler started, ticking every %ss", settings.tick_seconds)
