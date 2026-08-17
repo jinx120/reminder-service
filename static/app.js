@@ -334,21 +334,27 @@ async function submitForm(event) {
   }
 
   const editing = editingId !== null;
-  const response = await fetch(editing ? `${API}/${editingId}` : API, {
-    method: editing ? "PATCH" : "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    return reportFailure(response, "Could not save that reminder.");
-  }
+  const submitButton = document.getElementById("submit-button");
+  submitButton.disabled = true;   // guard against a double-click / double-Enter firing twice
+  try {
+    const response = await fetch(editing ? `${API}/${editingId}` : API, {
+      method: editing ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      return reportFailure(response, "Could not save that reminder.");
+    }
 
-  const saved = await response.json();
-  // Echo the resolved time: a natural-language misparse has to be visible now,
-  // not days later as a reminder that never arrived.
-  toast(`${editing ? "Updated" : "Added"} “${saved.title}” for ${formatAbsolute(saved.due_at)}.`);
-  cancelEdit();
-  loadReminders();
+    const saved = await response.json();
+    // Echo the resolved time: a natural-language misparse has to be visible now,
+    // not days later as a reminder that never arrived.
+    toast(`${editing ? "Updated" : "Added"} “${saved.title}” for ${formatAbsolute(saved.due_at)}.`);
+    cancelEdit();
+    loadReminders();
+  } finally {
+    submitButton.disabled = false;
+  }
 }
 
 function resetDefaults() {
