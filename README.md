@@ -89,7 +89,7 @@ Messages from any chat id other than `CHAT_ID` are logged and ignored.
 | `QUIET_HOURS_START` | unset | Local-time start of a window in which sends (including retries) are suppressed. Must be set together with `QUIET_HOURS_END`, or not at all — a half-configured window is rejected at startup. Handles a window that crosses midnight. |
 | `QUIET_HOURS_END` | unset | Local-time end of the suppression window. |
 | `DEFAULT_SNOOZE_MIN` | `15` | Minutes added when a reminder is snoozed without an explicit duration (dashboard, Telegram button, and MCP `snooze_reminder` all fall back to this). |
-| `MAX_SNOOZES` | `20` | Snoozes allowed per reminder before further snooze attempts are refused with a cap message. |
+| `MAX_SNOOZES` | `20` | Snoozes allowed per *occurrence* before further snooze attempts are refused with a cap message. A recurring series resets the count each time it rolls forward. |
 | `MCP_ENABLED` | `true` | Mounts the `/mcp` connector (see below). Set `false` to drop the endpoint entirely, with no code change. |
 
 All timestamps are stored and served as UTC; the dashboard converts to your
@@ -130,6 +130,28 @@ occurrence — there is no separate "next due" field. Each resolved occurrence i
 recorded in `completions`, including ones that **expired**: a missed occurrence
 rolls the series forward rather than killing it.
 
+### Known limitation: snoozing re-phases a series permanently
+
+Because `due_at` *is* the series anchor — the deliberate consequence of having
+no separate "next due" field — anything that moves `due_at` moves every future
+occurrence with it, for good.
+
+Snooze a `FREQ=WEEKLY;BYDAY=TU` reminder by 15 minutes and it is due 15 minutes
+later every Tuesday from then on; snooze it again and the shifts compound. The
+same is true of editing the due date directly. This defeats the point of
+`recur_from=schedule`, whose whole job is to keep a series on its original
+rhythm regardless of when you actually acted on it.
+
+The same mechanism applies to a daylight-saving gap: if an occurrence lands in
+the hour that does not exist locally, it is extrapolated forward, stored, and
+becomes the new anchor — so a daily 02:30 reminder becomes a daily 03:30
+reminder from that day on rather than being an hour off just once. This is
+unreachable while `TIMEZONE=UTC`.
+
+Fixing it properly needs a separate `series_anchor` column (and a `user_version`
+bump), so that snoozing moves only the current occurrence. Until then, prefer
+completing a recurring reminder late over snoozing it.
+
 ## Claude connector (MCP)
 
 The service exposes a remote MCP server at `/mcp` over Streamable HTTP.
@@ -157,7 +179,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn app.main:app --reload --port 8765
 ```
 
-302 tests, all passing, no warnings, as of this writing.
+311 tests, all passing, no warnings, as of this writing.
 
 **The app must run with a single worker.** Two workers means two schedulers and
 two polling loops: duplicate nags plus a Telegram `getUpdates` conflict.

@@ -20,7 +20,17 @@ def session(db):
 
 
 @pytest.fixture
-def client(db) -> TestClient:
+def client(db, settings) -> TestClient:
+    """A TestClient over a real lifespan, with the environment sanitised first.
+
+    The `settings` dependency is load-bearing, not decoration. `create_app()`
+    re-reads the environment itself, and `app/main.py` calls `load_dotenv()` at
+    import — so without it the real `.env` reaches `create_app`, `bot_enabled`
+    is True, and entering this context manager runs the lifespan: a live
+    `getMe` and `start_polling(drop_pending_updates=True)` against the
+    production bot. That contends with the deployed poller and can discard
+    genuine user taps.
+    """
     with TestClient(create_app(db=db)) as test_client:
         yield test_client
 

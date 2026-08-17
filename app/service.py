@@ -81,9 +81,29 @@ def create_reminder(
     return reminder
 
 
+def _validate_status(status: str | None) -> None:
+    """Reject a status no reminder can ever hold.
+
+    `status` is a plain string all the way down to a `WHERE status = ?`, so an
+    unknown value silently matches nothing. The completed state is called
+    `acked`, which makes "completed" and "done" the two likeliest things a
+    caller reaches for — and answering either with an empty list tells them
+    they have nothing outstanding. Erroring by name is the only honest reply.
+    """
+    if status is None:
+        return
+    valid = [s.value for s in ReminderStatus]
+    if status not in valid:
+        raise InvalidField(
+            f"Not a reminder status: {status!r}. Valid statuses are "
+            f"{', '.join(valid)}."
+        )
+
+
 def list_reminders(
     session: Session, *, status: str | None = None, limit: int | None = None
 ) -> list[Reminder]:
+    _validate_status(status)
     statement = select(Reminder)
     if status is not None:
         statement = statement.where(Reminder.status == status)
@@ -142,6 +162,15 @@ def update_reminder(
     for field, value in changes.items():
         setattr(reminder, field, value)
 
+    if "due_at" in changes:
+        # Rescheduling grants a fresh send budget, exactly as snoozing does.
+        # Without this, a reminder that has already spent `max_retries` stays
+        # pending until the tick expires it; move its due_at inside that
+        # window and decide() goes straight to EXPIRE at the new time, having
+        # sent nothing at all.
+        reminder.retry_count = 0
+        reminder.last_sent_at = None
+
     session.add(reminder)
     session.commit()
     session.refresh(reminder)
@@ -171,6 +200,7 @@ def search_reminders(
     limit: int | None = None,
 ) -> list[Reminder]:
     """Case-insensitive substring match over title and note."""
+    _validate_status(status)
     pattern = f"%{query}%"
     statement = select(Reminder).where(
         or_(Reminder.title.ilike(pattern), Reminder.note.ilike(pattern))

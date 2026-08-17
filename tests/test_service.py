@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlmodel import select
 
+from app import service
 from app.errors import (
     InvalidField,
     InvalidRecurrence,
@@ -497,3 +498,72 @@ def test_digest_day_boundary_follows_the_configured_zone(session):
     digest = due_digest(session, window="week", tz="Pacific/Auckland", now=now)
     assert [r.title for r in digest["upcoming"]] == ["soon"]
     assert digest["due_today"] == []
+
+
+# --- post-review fixes -----------------------------------------------------
+
+
+def test_update_reminder_resets_the_send_budget_when_due_at_moves(session):
+    """A rescheduled reminder must get a fresh retry budget.
+
+    Without this, a reminder that has already exhausted `max_retries` stays
+    `pending` until the tick expires it; edit its due date inside that window
+    and `decide()` goes straight to EXPIRE at the new due time, having sent
+    nothing. `snooze_reminder` already resets both fields — moving `due_at`
+    through `update_reminder` is the same act by a different door.
+    """
+    reminder = service.create_reminder(
+        session, title="pay rent", due_at="2026-08-20T09:00:00Z"
+    )
+    reminder.retry_count = 4
+    reminder.last_sent_at = datetime(2026, 8, 20, 10, 0)
+    session.add(reminder)
+    session.commit()
+
+    updated = service.update_reminder(
+        session, reminder.id, {"due_at": "2026-08-25T09:00:00Z"}
+    )
+
+    assert updated.retry_count == 0
+    assert updated.last_sent_at is None
+
+
+def test_update_reminder_leaves_the_send_budget_alone_when_due_at_is_untouched(session):
+    reminder = service.create_reminder(
+        session, title="pay rent", due_at="2026-08-20T09:00:00Z"
+    )
+    reminder.retry_count = 2
+    reminder.last_sent_at = datetime(2026, 8, 20, 10, 0)
+    session.add(reminder)
+    session.commit()
+
+    updated = service.update_reminder(session, reminder.id, {"title": "pay the rent"})
+
+    assert updated.retry_count == 2
+    assert updated.last_sent_at == datetime(2026, 8, 20, 10, 0)
+
+
+def test_list_reminders_rejects_a_status_that_is_not_a_real_state(session):
+    """An unknown status must be an error, not a confident empty list.
+
+    The completed state is named `acked`, so a caller reaching for
+    "completed" or "done" is making the single most likely mistake there is.
+    Answering it with `[]` tells them they have nothing.
+    """
+    with pytest.raises(InvalidField, match="completed"):
+        service.list_reminders(session, status="completed")
+
+
+def test_list_reminders_error_names_the_states_that_do_exist(session):
+    with pytest.raises(InvalidField, match="acked"):
+        service.list_reminders(session, status="done")
+
+
+def test_search_reminders_rejects_an_unknown_status(session):
+    with pytest.raises(InvalidField, match="acked"):
+        service.search_reminders(session, "rent", status="finished")
+
+
+def test_search_reminders_still_accepts_every_real_status(session):
+    for status in ("pending", "acked", "expired"):
+        assert service.search_reminders(session, "rent", status=status) == []

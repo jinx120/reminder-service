@@ -226,3 +226,32 @@ async def test_whats_due_defaults_to_today(mcp, db):
     from app.timeutil import utcnow
     seed(db, title="next week", due_at=utcnow() + timedelta(days=6))
     assert (await call(mcp, "whats_due"))["upcoming"] == []
+
+
+# --- post-review fixes -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_errors_on_an_unknown_status(mcp):
+    """The one place the connector used to guess instead of erroring.
+
+    A model asking for `status="completed"` — the natural word for a state
+    this service calls `acked` — got `[]` back and told the user they had
+    nothing due.
+    """
+    with pytest.raises(ToolError, match="completed"):
+        await mcp.call_tool("list_reminders", {"status": "completed"})
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_error_names_the_valid_states(mcp):
+    with pytest.raises(ToolError, match="acked"):
+        await mcp.call_tool("list_reminders", {"status": "done"})
+
+
+@pytest.mark.asyncio
+async def test_search_reminders_errors_on_an_unknown_status(mcp):
+    with pytest.raises(ToolError, match="acked"):
+        await mcp.call_tool(
+            "search_reminders", {"query": "rent", "status": "finished"}
+        )
