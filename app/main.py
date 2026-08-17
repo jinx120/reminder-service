@@ -5,11 +5,21 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.bot import build_application, send_reminder_message
 from app.config import load_settings
 from app.db import Database
+from app.errors import (
+    InvalidField,
+    InvalidRecurrence,
+    InvalidTime,
+    ReminderNotFound,
+    ReminderNotPending,
+    ServiceError,
+    SnoozeLimitReached,
+)
 from app.migrations import migrate
 from app.routers import reminders
 from app.scheduler import build_scheduler, log_sender
@@ -32,6 +42,27 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 load_dotenv()
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# The single mapping from domain error to HTTP status. Starlette resolves a
+# handler by walking the exception's MRO, so registering ServiceError once
+# covers every subclass, including ones added later.
+ERROR_STATUS = {
+    ReminderNotFound: 404,
+    ReminderNotPending: 409,
+    SnoozeLimitReached: 409,
+    InvalidRecurrence: 422,
+    InvalidTime: 422,
+    InvalidField: 422,
+}
+
+
+def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(ServiceError)
+    async def handle_service_error(request, exc: ServiceError):
+        return JSONResponse(
+            status_code=ERROR_STATUS.get(type(exc), 400),
+            content={"detail": str(exc)},
+        )
 
 
 @asynccontextmanager
@@ -88,6 +119,7 @@ def create_app(db: Database | None = None) -> FastAPI:
     # aborts startup deliberately.
     migrate(app.state.db.engine)
 
+    register_error_handlers(app)
     app.include_router(reminders.router)
     # Mounted last: StaticFiles owns "/" and would otherwise shadow /api.
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
