@@ -1,9 +1,292 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlmodel import Session, select
+from sqlmodel import Session, or_, select
 
-from app.models import Notification, Reminder, ReminderStatus
-from app.timeutil import utcnow
+from app.errors import (
+    InvalidField,
+    InvalidRecurrence,
+    InvalidTime,
+    ReminderNotFound,
+    ReminderNotPending,
+    ServiceError,
+    SnoozeLimitReached,
+)
+from app.logic import next_occurrence, validate_recurrence
+from app.models import Completion, CompletionOutcome, Notification, Reminder, ReminderStatus
+from app.timeutil import (
+    from_local_naive,
+    parse_duration_minutes,
+    parse_when,
+    to_local_naive,
+    to_utc_naive,
+    utcnow,
+)
+
+# Re-exported so adapters can `from app.service import ReminderNotFound`
+# without needing to know the errors live in their own module.
+__all__ = [
+    "InvalidField", "InvalidRecurrence", "InvalidTime", "ReminderNotFound",
+    "ReminderNotPending", "ServiceError", "SnoozeLimitReached",
+    "MUTABLE_FIELDS", "create_reminder", "list_reminders", "get_reminder",
+    "update_reminder", "delete_reminder", "search_reminders",
+    "latest_notification", "ack_reminder", "find_reply_ack_target", "record_send",
+    "complete_reminder", "snooze_reminder", "expire_reminder", "due_digest",
+]
+
+MUTABLE_FIELDS = frozenset({
+    "title", "note", "due_at", "recurrence", "recur_from",
+    "retry_interval_min", "max_retries",
+})
+# `note` and `recurrence` are the only two a client may legitimately clear.
+# Without this guard an explicit JSON null on any other field would reach the
+# database as a NOT NULL violation, i.e. a 500 where a 4xx belongs.
+CLEARABLE_FIELDS = frozenset({"note", "recurrence"})
+
+
+def _resolve_due(value: datetime | str, *, tz: str, now: datetime | None) -> datetime:
+    """Accept either a datetime or a string (ISO or natural language)."""
+    if isinstance(value, datetime):
+        return to_utc_naive(value)
+    return parse_when(value, tz=tz, now=now)
+
+
+def create_reminder(
+    session: Session,
+    *,
+    title: str,
+    due_at: datetime | str,
+    note: str | None = None,
+    recurrence: str | None = None,
+    recur_from: str = "schedule",
+    retry_interval_min: int = 15,
+    max_retries: int = 4,
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> Reminder:
+    """Create a pending reminder. Raises InvalidTime / InvalidRecurrence."""
+    now = now or utcnow()
+    validate_recurrence(recurrence, recur_from)
+    reminder = Reminder(
+        title=title,
+        note=note,
+        due_at=_resolve_due(due_at, tz=tz, now=now),
+        recurrence=recurrence,
+        recur_from=recur_from,
+        retry_interval_min=retry_interval_min,
+        max_retries=max_retries,
+    )
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    return reminder
+
+
+def _validate_status(status: str | None) -> None:
+    """Reject a status no reminder can ever hold.
+
+    `status` is a plain string all the way down to a `WHERE status = ?`, so an
+    unknown value silently matches nothing. The completed state is called
+    `acked`, which makes "completed" and "done" the two likeliest things a
+    caller reaches for — and answering either with an empty list tells them
+    they have nothing outstanding. Erroring by name is the only honest reply.
+    """
+    if status is None:
+        return
+    valid = [s.value for s in ReminderStatus]
+    if status not in valid:
+        raise InvalidField(
+            f"Not a reminder status: {status!r}. Valid statuses are "
+            f"{', '.join(valid)}."
+        )
+
+
+def list_reminders(
+    session: Session, *, status: str | None = None, limit: int | None = None
+) -> list[Reminder]:
+    _validate_status(status)
+    statement = select(Reminder)
+    if status is not None:
+        statement = statement.where(Reminder.status == status)
+    statement = statement.order_by(Reminder.due_at, Reminder.id)
+    if limit is not None:
+        statement = statement.limit(limit)
+    return list(session.exec(statement).all())
+
+
+def get_reminder(session: Session, reminder_id: int) -> Reminder:
+    reminder = session.get(Reminder, reminder_id)
+    if reminder is None:
+        raise ReminderNotFound(f"Reminder {reminder_id} not found")
+    return reminder
+
+
+def _require_pending(reminder: Reminder) -> None:
+    if reminder.status != ReminderStatus.pending.value:
+        raise ReminderNotPending(
+            f"Reminder {reminder.id} is already {reminder.status} and cannot be changed"
+        )
+
+
+def update_reminder(
+    session: Session,
+    reminder_id: int,
+    changes: dict,
+    *,
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> Reminder:
+    """Apply a partial update to a pending reminder."""
+    now = now or utcnow()
+    reminder = get_reminder(session, reminder_id)
+    _require_pending(reminder)
+
+    unknown = set(changes) - MUTABLE_FIELDS
+    if unknown:
+        raise InvalidField(f"Not an editable field: {', '.join(sorted(unknown))}")
+
+    nulled = {f for f, v in changes.items() if v is None} - CLEARABLE_FIELDS
+    if nulled:
+        raise InvalidField(f"Cannot be cleared: {', '.join(sorted(nulled))}")
+
+    if "recurrence" in changes or "recur_from" in changes:
+        # Validate the *resulting* pair, so changing one field is still
+        # checked against the value already stored for the other.
+        validate_recurrence(
+            changes.get("recurrence", reminder.recurrence),
+            changes.get("recur_from", reminder.recur_from),
+        )
+
+    if changes.get("due_at") is not None:
+        changes = {**changes, "due_at": _resolve_due(changes["due_at"], tz=tz, now=now)}
+
+    for field, value in changes.items():
+        setattr(reminder, field, value)
+
+    if "due_at" in changes:
+        # Rescheduling grants a fresh send budget, exactly as snoozing does.
+        # Without this, a reminder that has already spent `max_retries` stays
+        # pending until the tick expires it; move its due_at inside that
+        # window and decide() goes straight to EXPIRE at the new time, having
+        # sent nothing at all.
+        reminder.retry_count = 0
+        reminder.last_sent_at = None
+
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    return reminder
+
+
+def delete_reminder(session: Session, reminder_id: int) -> None:
+    """Hard delete, cascading to notifications and completions."""
+    reminder = get_reminder(session, reminder_id)
+    for notification in session.exec(
+        select(Notification).where(Notification.reminder_id == reminder_id)
+    ).all():
+        session.delete(notification)
+    for completion in session.exec(
+        select(Completion).where(Completion.reminder_id == reminder_id)
+    ).all():
+        session.delete(completion)
+    session.delete(reminder)
+    session.commit()
+
+
+def search_reminders(
+    session: Session,
+    query: str,
+    *,
+    status: str | None = None,
+    limit: int | None = None,
+) -> list[Reminder]:
+    """Case-insensitive substring match over title and note."""
+    _validate_status(status)
+    pattern = f"%{query}%"
+    statement = select(Reminder).where(
+        or_(Reminder.title.ilike(pattern), Reminder.note.ilike(pattern))
+    )
+    if status is not None:
+        statement = statement.where(Reminder.status == status)
+    statement = statement.order_by(Reminder.due_at, Reminder.id)
+    if limit is not None:
+        statement = statement.limit(limit)
+    return list(session.exec(statement).all())
+
+
+def _stamp_latest_notification(session: Session, reminder_id: int, now: datetime) -> None:
+    notification = latest_notification(session, reminder_id)
+    if notification is not None and notification.acked_at is None:
+        notification.acked_at = now
+        session.add(notification)
+
+
+def _resolve_occurrence(
+    session: Session,
+    reminder: Reminder,
+    *,
+    outcome: str,
+    resolved_at: datetime,
+    tz: str,
+    terminal_status: str,
+) -> None:
+    """Close out one occurrence, rolling a series forward if there is one.
+
+    Does not commit — the caller owns the transaction boundary, which is what
+    lets the scheduler resolve several reminders in a single tick.
+    """
+    session.add(
+        Completion(
+            reminder_id=reminder.id,
+            scheduled_for=reminder.due_at,
+            completed_at=resolved_at,
+            outcome=outcome,
+        )
+    )
+
+    if reminder.recurrence is None:
+        reminder.status = terminal_status
+        session.add(reminder)
+        return
+
+    reminder.due_at = next_occurrence(
+        rule=reminder.recurrence,
+        recur_from=reminder.recur_from,
+        previous_due=reminder.due_at,
+        resolved_at=resolved_at,
+        now=resolved_at,
+        tz=tz,
+    )
+    reminder.status = ReminderStatus.pending.value
+    reminder.retry_count = 0
+    reminder.last_sent_at = None
+    reminder.snooze_count = 0
+    session.add(reminder)
+
+
+def complete_reminder(
+    session: Session,
+    reminder_id: int,
+    *,
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> Reminder:
+    """Mark an occurrence done. A recurring reminder rolls forward in place."""
+    now = now or utcnow()
+    reminder = get_reminder(session, reminder_id)
+    _require_pending(reminder)
+
+    _stamp_latest_notification(session, reminder_id, now)
+    _resolve_occurrence(
+        session,
+        reminder,
+        outcome=CompletionOutcome.completed.value,
+        resolved_at=now,
+        tz=tz,
+        terminal_status=ReminderStatus.acked.value,
+    )
+    session.commit()
+    session.refresh(reminder)
+    return reminder
 
 
 def latest_notification(session: Session, reminder_id: int) -> Notification | None:
@@ -15,27 +298,22 @@ def latest_notification(session: Session, reminder_id: int) -> Notification | No
     ).first()
 
 
-def ack_reminder(session: Session, reminder_id: int, *, now: datetime | None = None) -> bool:
-    """Mark a pending reminder acknowledged.
+def ack_reminder(
+    session: Session,
+    reminder_id: int,
+    *,
+    now: datetime | None = None,
+    tz: str = "UTC",
+) -> bool:
+    """Telegram's completion path: complete_reminder with a boolean result.
 
-    Returns False (and changes nothing) if the reminder is unknown or has
-    already been acked or expired, which makes double-taps on the inline
-    button harmless.
+    Returns False (and changes nothing) if the reminder is unknown or already
+    resolved, which makes double-taps on the inline button harmless.
     """
-    now = now or utcnow()
-    reminder = session.get(Reminder, reminder_id)
-    if reminder is None or reminder.status != ReminderStatus.pending.value:
+    try:
+        complete_reminder(session, reminder_id, tz=tz, now=now)
+    except (ReminderNotFound, ReminderNotPending):
         return False
-
-    reminder.status = ReminderStatus.acked.value
-    session.add(reminder)
-
-    notification = latest_notification(session, reminder_id)
-    if notification is not None and notification.acked_at is None:
-        notification.acked_at = now
-        session.add(notification)
-
-    session.commit()
     return True
 
 
@@ -76,3 +354,111 @@ def record_send(
     reminder.retry_count += 1
     reminder.last_sent_at = now
     session.add(reminder)
+
+
+def snooze_reminder(
+    session: Session,
+    reminder_id: int,
+    *,
+    duration: str | None = None,
+    default_minutes: int = 15,
+    max_snoozes: int = 20,
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> Reminder:
+    """Push a pending reminder's due time forward. Status stays pending.
+
+    `duration` accepts a shorthand ("30m", "2h") or an absolute phrase
+    ("tomorrow at 9am"). Omitted, it uses `default_minutes`.
+    """
+    now = now or utcnow()
+    reminder = get_reminder(session, reminder_id)
+    _require_pending(reminder)
+
+    if reminder.snooze_count >= max_snoozes:
+        raise SnoozeLimitReached(
+            f"Reminder {reminder_id} has already been snoozed {reminder.snooze_count} "
+            f"times (limit {max_snoozes})"
+        )
+
+    if duration is None:
+        new_due = now + timedelta(minutes=default_minutes)
+    else:
+        minutes = parse_duration_minutes(duration)
+        new_due = (
+            now + timedelta(minutes=minutes)
+            if minutes is not None
+            else parse_when(duration, tz=tz, now=now)
+        )
+    if new_due <= now:
+        raise InvalidTime(f"Snooze target {duration!r} is not in the future")
+
+    reminder.due_at = new_due
+    reminder.retry_count = 0
+    reminder.last_sent_at = None
+    reminder.snooze_count += 1
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    return reminder
+
+
+def expire_reminder(
+    session: Session, reminder: Reminder, *, now: datetime, tz: str = "UTC"
+) -> None:
+    """Retry budget exhausted. A recurring series rolls forward instead of dying.
+
+    Does not commit — the scheduler resolves a whole tick in one transaction.
+    """
+    _resolve_occurrence(
+        session,
+        reminder,
+        outcome=CompletionOutcome.expired.value,
+        resolved_at=now,
+        tz=tz,
+        terminal_status=ReminderStatus.expired.value,
+    )
+
+
+def _end_of_local_day(now: datetime, tz: str) -> datetime:
+    local = to_local_naive(now, tz)
+    return from_local_naive(
+        local.replace(hour=23, minute=59, second=59, microsecond=999999), tz
+    )
+
+
+def _resolve_horizon(window: str, *, now: datetime, tz: str, end_of_today: datetime) -> datetime:
+    named = {
+        "today": end_of_today,
+        "tomorrow": end_of_today + timedelta(days=1),
+        "week": now + timedelta(days=7),
+        "all": now + timedelta(days=3650),
+    }
+    if window.strip().lower() in named:
+        return named[window.strip().lower()]
+    return parse_when(window, tz=tz, now=now)
+
+
+def due_digest(
+    session: Session,
+    *,
+    window: str = "today",
+    tz: str = "UTC",
+    now: datetime | None = None,
+) -> dict:
+    """Pending work split into overdue / due today / upcoming.
+
+    Day boundaries follow `tz`, not UTC, so "today" means the user's today.
+    """
+    now = now or utcnow()
+    end_of_today = _end_of_local_day(now, tz)
+    horizon = _resolve_horizon(window, now=now, tz=tz, end_of_today=end_of_today)
+
+    pending = list_reminders(session, status=ReminderStatus.pending.value)
+    return {
+        "now": now,
+        "horizon": horizon,
+        "overdue": [r for r in pending if r.due_at < now],
+        "due_today": [r for r in pending if now <= r.due_at <= end_of_today],
+        "upcoming": [r for r in pending if end_of_today < r.due_at <= horizon],
+    }

@@ -1,19 +1,23 @@
 from collections.abc import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlmodel import Session, select
 
+from app import service
+from app.config import Settings
 from app.db import Database
-from app.models import Notification, Reminder, ReminderStatus
+from app.models import Completion, Notification, ReminderStatus
 from app.schemas import (
+    ConfigRead,
     ReminderCreate,
     ReminderDetail,
     ReminderRead,
     ReminderUpdate,
+    SnoozeRequest,
     to_detail,
     to_read,
 )
-from app.timeutil import to_utc_naive
+from app.timeutil import as_local_iso, utcnow
 
 router = APIRouter(prefix="/api", tags=["reminders"])
 
@@ -24,24 +28,53 @@ def get_session(request: Request) -> Iterator[Session]:
         yield session
 
 
+def get_settings(request: Request) -> Settings:
+    return request.app.state.settings
+
+
 @router.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/reminders", response_model=ReminderRead, status_code=201)
-def create_reminder(payload: ReminderCreate, session: Session = Depends(get_session)):
-    reminder = Reminder(
-        title=payload.title,
-        note=payload.note,
-        due_at=to_utc_naive(payload.due_at),
-        retry_interval_min=payload.retry_interval_min,
-        max_retries=payload.max_retries,
+@router.get("/config", response_model=ConfigRead)
+def read_config(settings: Settings = Depends(get_settings)):
+    """Everything the frontend needs to render times and label its controls."""
+    return ConfigRead(
+        timezone=settings.timezone,
+        default_snooze_min=settings.default_snooze_min,
+        max_snoozes=settings.max_snoozes,
+        quiet_hours_start=(
+            settings.quiet_hours_start.strftime("%H:%M")
+            if settings.quiet_hours_start else None
+        ),
+        quiet_hours_end=(
+            settings.quiet_hours_end.strftime("%H:%M")
+            if settings.quiet_hours_end else None
+        ),
+        server_time=as_local_iso(utcnow(), settings.timezone),
     )
-    session.add(reminder)
-    session.commit()
-    session.refresh(reminder)
-    return to_read(reminder)
+
+
+@router.post("/reminders", response_model=ReminderRead, status_code=201)
+def create_reminder(
+    payload: ReminderCreate,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    return to_read(
+        service.create_reminder(
+            session,
+            title=payload.title,
+            note=payload.note,
+            due_at=payload.due_at,
+            recurrence=payload.recurrence,
+            recur_from=payload.recur_from,
+            retry_interval_min=payload.retry_interval_min,
+            max_retries=payload.max_retries,
+            tz=settings.timezone,
+        )
+    )
 
 
 @router.get("/reminders", response_model=list[ReminderRead])
@@ -49,29 +82,26 @@ def list_reminders(
     status: ReminderStatus | None = None,
     session: Session = Depends(get_session),
 ):
-    statement = select(Reminder)
-    if status is not None:
-        statement = statement.where(Reminder.status == status.value)
-    statement = statement.order_by(Reminder.due_at, Reminder.id)
-    return [to_read(r) for r in session.exec(statement).all()]
-
-
-def _get_or_404(session: Session, reminder_id: int) -> Reminder:
-    reminder = session.get(Reminder, reminder_id)
-    if reminder is None:
-        raise HTTPException(status_code=404, detail="Reminder not found")
-    return reminder
+    reminders = service.list_reminders(
+        session, status=status.value if status is not None else None
+    )
+    return [to_read(r) for r in reminders]
 
 
 @router.get("/reminders/{reminder_id}", response_model=ReminderDetail)
 def get_reminder(reminder_id: int, session: Session = Depends(get_session)):
-    reminder = _get_or_404(session, reminder_id)
+    reminder = service.get_reminder(session, reminder_id)
     notifications = session.exec(
         select(Notification)
         .where(Notification.reminder_id == reminder_id)
         .order_by(Notification.sent_at, Notification.id)
     ).all()
-    return to_detail(reminder, list(notifications))
+    completions = session.exec(
+        select(Completion)
+        .where(Completion.reminder_id == reminder_id)
+        .order_by(Completion.completed_at, Completion.id)
+    ).all()
+    return to_detail(reminder, list(notifications), list(completions))
 
 
 @router.patch("/reminders/{reminder_id}", response_model=ReminderRead)
@@ -79,33 +109,49 @@ def update_reminder(
     reminder_id: int,
     payload: ReminderUpdate,
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
-    reminder = _get_or_404(session, reminder_id)
-    if reminder.status != ReminderStatus.pending.value:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot edit a reminder that is already {reminder.status}",
+    return to_read(
+        service.update_reminder(
+            session,
+            reminder_id,
+            payload.model_dump(exclude_unset=True),
+            tz=settings.timezone,
         )
+    )
 
-    changes = payload.model_dump(exclude_unset=True)
-    if "due_at" in changes and changes["due_at"] is not None:
-        changes["due_at"] = to_utc_naive(changes["due_at"])
-    for field, value in changes.items():
-        setattr(reminder, field, value)
 
-    session.add(reminder)
-    session.commit()
-    session.refresh(reminder)
-    return to_read(reminder)
+@router.post("/reminders/{reminder_id}/complete", response_model=ReminderRead)
+def complete_reminder(
+    reminder_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    return to_read(
+        service.complete_reminder(session, reminder_id, tz=settings.timezone)
+    )
+
+
+@router.post("/reminders/{reminder_id}/snooze", response_model=ReminderRead)
+def snooze_reminder(
+    reminder_id: int,
+    payload: SnoozeRequest | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    return to_read(
+        service.snooze_reminder(
+            session,
+            reminder_id,
+            duration=payload.duration if payload else None,
+            default_minutes=settings.default_snooze_min,
+            max_snoozes=settings.max_snoozes,
+            tz=settings.timezone,
+        )
+    )
 
 
 @router.delete("/reminders/{reminder_id}", status_code=204)
 def delete_reminder(reminder_id: int, session: Session = Depends(get_session)):
-    reminder = _get_or_404(session, reminder_id)
-    for notification in session.exec(
-        select(Notification).where(Notification.reminder_id == reminder_id)
-    ).all():
-        session.delete(notification)
-    session.delete(reminder)
-    session.commit()
+    service.delete_reminder(session, reminder_id)
     return Response(status_code=204)

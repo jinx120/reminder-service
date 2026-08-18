@@ -85,9 +85,91 @@ Messages from any chat id other than `CHAT_ID` are logged and ignored.
 | `TICK_SECONDS` | `30` | Scheduler interval |
 | `DEFAULT_RETRY_INTERVAL_MIN` | `15` | Form default |
 | `DEFAULT_MAX_RETRIES` | `4` | Form default |
+| `TIMEZONE` | `UTC` | IANA zone name used for natural-language input parsing, quiet hours, recurrence day boundaries, and dashboard/bot display. Storage is always UTC. An invalid name fails fast at startup rather than silently falling back. |
+| `QUIET_HOURS_START` | unset | Local-time start of a window in which sends (including retries) are suppressed. Must be set together with `QUIET_HOURS_END`, or not at all — a half-configured window is rejected at startup. Handles a window that crosses midnight. |
+| `QUIET_HOURS_END` | unset | Local-time end of the suppression window. |
+| `DEFAULT_SNOOZE_MIN` | `15` | Minutes added when a reminder is snoozed without an explicit duration (dashboard, Telegram button, and MCP `snooze_reminder` all fall back to this). |
+| `MAX_SNOOZES` | `20` | Snoozes allowed per *occurrence* before further snooze attempts are refused with a cap message. A recurring series resets the count each time it rolls forward. |
+| `MCP_ENABLED` | `true` | Mounts the `/mcp` connector (see below). Set `false` to drop the endpoint entirely, with no code change. |
 
 All timestamps are stored and served as UTC; the dashboard converts to your
 browser's local time on both input and display.
+
+The six settings above `DEFAULT_MAX_RETRIES` are new in this release and all
+optional. An `.env` that predates them is read exactly as before: no quiet
+hours, 15-minute snoozes capped at 20, UTC everywhere, and the MCP connector
+mounted.
+
+## Recurring reminders
+
+Set a `recurrence` on any reminder using a small RRULE subset:
+
+| Rule | Meaning |
+|---|---|
+| `FREQ=DAILY` | every day |
+| `FREQ=DAILY;INTERVAL=3` | every 3 days |
+| `FREQ=WEEKLY;BYDAY=MO,WE,FR` | Mondays, Wednesdays, Fridays |
+| `FREQ=MONTHLY` | same day each month |
+| `FREQ=YEARLY` | same date each year |
+
+`FREQ` is required and must be `DAILY`, `WEEKLY`, `MONTHLY`, or `YEARLY`.
+`BYDAY` works only with `FREQ=WEEKLY`. Anything else is rejected with a message
+naming the component — a rule the service will not honour is never silently
+accepted.
+
+`recur_from` chooses the anchor:
+
+- `schedule` (default) — the next occurrence follows the *scheduled* time, so
+  "bins out every Tuesday" stays on Tuesdays even when acked late.
+- `completion` — the next occurrence follows the *completion* time, so
+  "water the plants every 3 days" means 3 days after you actually did it.
+  `BYDAY` cannot be combined with this anchor.
+
+A recurring reminder rolls forward in place, so `due_at` is always the next
+occurrence — there is no separate "next due" field. Each resolved occurrence is
+recorded in `completions`, including ones that **expired**: a missed occurrence
+rolls the series forward rather than killing it.
+
+### Known limitation: snoozing re-phases a series permanently
+
+Because `due_at` *is* the series anchor — the deliberate consequence of having
+no separate "next due" field — anything that moves `due_at` moves every future
+occurrence with it, for good.
+
+Snooze a `FREQ=WEEKLY;BYDAY=TU` reminder by 15 minutes and it is due 15 minutes
+later every Tuesday from then on; snooze it again and the shifts compound. The
+same is true of editing the due date directly. This defeats the point of
+`recur_from=schedule`, whose whole job is to keep a series on its original
+rhythm regardless of when you actually acted on it.
+
+The same mechanism applies to a daylight-saving gap: if an occurrence lands in
+the hour that does not exist locally, it is extrapolated forward, stored, and
+becomes the new anchor — so a daily 02:30 reminder becomes a daily 03:30
+reminder from that day on rather than being an hour off just once. This is
+unreachable while `TIMEZONE=UTC`.
+
+Fixing it properly needs a separate `series_anchor` column (and a `user_version`
+bump), so that snoozing moves only the current occurrence. Until then, prefer
+completing a recurring reminder late over snoozing it.
+
+## Claude connector (MCP)
+
+The service exposes a remote MCP server at `/mcp` over Streamable HTTP.
+
+Add it in claude.ai under Settings → Connectors → Add custom connector, with the
+URL `https://reminder.tail78f4cc.ts.net/mcp`. In Claude Code:
+`claude mcp add --transport http reminders https://reminder.tail78f4cc.ts.net/mcp`.
+
+Nine tools are available: `create_reminder`, `list_reminders`, `get_reminder`,
+`update_reminder`, `complete_reminder`, `snooze_reminder`, `delete_reminder`,
+`search_reminders`, `whats_due`. Every tool accepts natural-language times
+("tomorrow at 9am", "in 2 hours") resolved in `TIMEZONE`, and every response
+echoes the resolved absolute time.
+
+**There is no authentication on `/mcp`**, matching the dashboard. Anyone who
+knows the Funnel URL can create, edit, and delete reminders and trigger Telegram
+notifications. This is a deliberate choice for a single-user service on an
+unguessable hostname. Set `MCP_ENABLED=false` to drop the endpoint entirely.
 
 ## Development
 
@@ -97,11 +179,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn app.main:app --reload --port 8765
 ```
 
+311 tests, all passing, no warnings, as of this writing.
+
 **The app must run with a single worker.** Two workers means two schedulers and
 two polling loops: duplicate nags plus a Telegram `getUpdates` conflict.
 
 ## Not built (v1 scope)
 
-Multi-user/multi-chat, recurring reminders, SMS fallback, and dashboard auth
-beyond network-level access. SMS would slot in behind the scheduler's `Sender`
-interface without touching the retry logic.
+Multi-user/multi-chat, SMS fallback, and auth on the dashboard or the MCP
+connector beyond network-level access (see "Claude connector" above for that
+tradeoff). SMS would slot in behind the scheduler's `Sender` interface without
+touching the retry logic.
