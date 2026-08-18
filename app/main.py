@@ -121,6 +121,17 @@ async def lifespan(app: FastAPI):
             "reminders will be logged instead of sent"
         )
 
+    # The zone is silently wrong by default on a non-UTC deployment: it moves every
+    # displayed time, every parsed phrase, and quiet hours together, so nothing looks
+    # broken locally. Log it so a stale .env is visible at boot.
+    logger.info(
+        "timezone %s; quiet hours %s",
+        settings.timezone,
+        f"{settings.quiet_hours_start}-{settings.quiet_hours_end}"
+        if settings.quiet_hours_enabled
+        else "disabled",
+    )
+
     scheduler = build_scheduler(db, sender, settings)
     scheduler.start()
     app.state.scheduler = scheduler

@@ -78,3 +78,19 @@ def test_mcp_can_be_disabled_by_configuration(db, monkeypatch):
         # StaticFiles owns "/" and answers everything else with its own 404.
         assert disabled_client.post("/mcp", json=INITIALIZE,
                                     headers=MCP_HEADERS).status_code != 200
+
+
+def test_startup_logs_the_effective_timezone(monkeypatch, tmp_path, caplog):
+    """The zone drives display, NL parsing, and quiet hours, and its default (UTC)
+    is silently wrong on any non-UTC host. Log it so a misconfigured deploy is
+    visible in the logs instead of showing up as reminders firing hours off."""
+    monkeypatch.delenv("BOT_TOKEN", raising=False)
+    monkeypatch.delenv("CHAT_ID", raising=False)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+
+    with caplog.at_level("INFO", logger="reminder"):
+        with TestClient(create_app()):
+            pass
+
+    assert "America/Los_Angeles" in caplog.text
