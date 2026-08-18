@@ -104,7 +104,7 @@ Three points where the spec left a gap. Recorded here so they are not re-litigat
 - Consumes: nothing.
 - Produces: `Settings` gains `timezone: str`, `quiet_hours_start: time | None`, `quiet_hours_end: time | None`, `default_snooze_min: int`, `max_snoozes: int`, `mcp_enabled: bool`, plus properties `tzinfo -> ZoneInfo` and `quiet_hours_enabled -> bool`. `load_settings()` raises `ValueError` on an invalid IANA name, a malformed `HH:MM`, or exactly one of the two quiet-hours bounds being set. New pytest fixture `settings` returning `load_settings()` with a clean environment.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_config.py`:
 
@@ -186,12 +186,12 @@ def test_snooze_settings_override(monkeypatch):
     assert s.max_snoozes == 3
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_config.py -v`
 Expected: FAIL — `AttributeError: 'Settings' object has no attribute 'timezone'`.
 
-- [ ] **Step 3: Implement the settings**
+- [x] **Step 3: Implement the settings**
 
 Replace `app/config.py` in full:
 
@@ -310,7 +310,7 @@ def load_settings() -> Settings:
     )
 ```
 
-- [ ] **Step 4: Add the `settings` fixture**
+- [x] **Step 4: Add the `settings` fixture**
 
 Append to `tests/conftest.py`:
 
@@ -333,12 +333,12 @@ def settings(monkeypatch) -> Settings:
     return load_settings()
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_config.py -v && .venv/bin/python -m pytest -q`
 Expected: all config tests PASS; the full suite still passes (79 + the new config tests).
 
-- [ ] **Step 6: Document the new settings**
+- [x] **Step 6: Document the new settings**
 
 Append to `.env.example`:
 
@@ -356,7 +356,7 @@ MAX_SNOOZES=20
 MCP_ENABLED=true
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/config.py tests/test_config.py tests/conftest.py .env.example
@@ -375,7 +375,7 @@ git commit -m "feat(config): timezone, quiet hours, snooze, and MCP settings"
 - Consumes: nothing.
 - Produces: `Reminder.recurrence: str | None`, `Reminder.recur_from: str` (default `"schedule"`), `Reminder.snooze_count: int` (default `0`); `class RecurFrom(str, Enum)` with members `schedule`/`completion`; `class CompletionOutcome(str, Enum)` with members `completed`/`expired`; `class Completion(SQLModel, table=True)` with `id`, `reminder_id` (FK, indexed), `scheduled_for: datetime`, `completed_at: datetime`, `outcome: str`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_models.py`:
 
@@ -447,12 +447,12 @@ def test_outcome_is_a_plain_string_column_not_an_enum_type(session):
     assert column.type.python_type is str
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_models.py -v`
 Expected: FAIL with `ImportError: cannot import name 'Completion' from 'app.models'`.
 
-- [ ] **Step 3: Add the columns and the table**
+- [x] **Step 3: Add the columns and the table**
 
 In `app/models.py`, add these enums below `ReminderStatus`:
 
@@ -498,12 +498,12 @@ class Completion(SQLModel, table=True):
     outcome: str = Field(default=CompletionOutcome.completed.value)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_models.py -v && .venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/models.py tests/test_models.py
@@ -525,7 +525,7 @@ git commit -m "feat(models): recurrence columns and completions table"
 
 **Why a hand-rolled migration and not Alembic:** one additive step against one SQLite file on one host. Alembic's env/versions scaffolding is more machinery than the whole change.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_migrations.py`. `PROD_SCHEMA_DDL` below is the **verbatim** output of `select sql from sqlite_master` on CT 108 — do not "tidy" it, its exact shape is the point of the test.
 
@@ -657,12 +657,12 @@ def test_migration_on_a_fresh_create_all_database_is_a_no_op(db):
     assert migrate(db.engine) == SCHEMA_VERSION
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_migrations.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.migrations'`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 Create `app/migrations.py`:
 
@@ -727,12 +727,12 @@ def migrate(engine: Engine) -> int:
         return SCHEMA_VERSION
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_migrations.py -v`
 Expected: all 7 PASS.
 
-- [ ] **Step 5: Run the migration at startup**
+- [x] **Step 5: Run the migration at startup**
 
 In `app/main.py`, add the import beside the others:
 
@@ -749,12 +749,12 @@ and in `create_app()`, immediately after `app.state.db.create_all()`:
     migrate(app.state.db.engine)
 ```
 
-- [ ] **Step 6: Verify the whole suite still passes**
+- [x] **Step 6: Verify the whole suite still passes**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS, including the existing `tests/test_main.py`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/migrations.py tests/test_migrations.py app/main.py
@@ -777,7 +777,7 @@ git commit -m "feat(db): versioned migration for recurrence columns and completi
   - `app/errors.py`: `ServiceError(Exception)`, and subclasses `ReminderNotFound`, `ReminderNotPending`, `InvalidRecurrence`, `SnoozeLimitReached`, `InvalidTime`, `InvalidField`.
   - `app/timeutil.py`: `to_local_naive(dt: datetime, tz: str) -> datetime`, `from_local_naive(dt: datetime, tz: str) -> datetime`, `parse_when(text: str, *, tz: str, now: datetime | None = None) -> datetime` (returns naive UTC, raises `InvalidTime`), `parse_duration_minutes(text: str) -> int | None`, `as_local_iso(dt: datetime | None, tz: str) -> str | None`.
 
-- [ ] **Step 1: Add the dependencies**
+- [x] **Step 1: Add the dependencies**
 
 Append to `requirements.txt`:
 
@@ -789,7 +789,7 @@ python-dateutil>=2.9,<3.0
 Run: `.venv/bin/pip install -r requirements.txt`
 Expected: already satisfied (`dateparser==1.4.2`, `python-dateutil==2.9.0.post0`); the pins just make the transitive dependency direct.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `tests/test_parsing.py`:
 
@@ -896,12 +896,12 @@ def test_non_durations_return_none_for_the_caller_to_fall_back(text):
     assert parse_duration_minutes(text) is None
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_parsing.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.errors'`.
 
-- [ ] **Step 4: Write the error types**
+- [x] **Step 4: Write the error types**
 
 Create `app/errors.py`:
 
@@ -946,7 +946,7 @@ class InvalidTime(ServiceError):
     """
 ```
 
-- [ ] **Step 5: Extend timeutil**
+- [x] **Step 5: Extend timeutil**
 
 Replace `app/timeutil.py` in full (the three existing functions are unchanged; the file gains the parsing boundary):
 
@@ -1075,17 +1075,17 @@ def parse_duration_minutes(text: str) -> int | None:
 ```
 
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_parsing.py -v`
 Expected: all PASS.
 
-- [ ] **Step 7: Verify nothing regressed**
+- [x] **Step 7: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/errors.py app/timeutil.py tests/test_parsing.py requirements.txt
@@ -1106,7 +1106,7 @@ git commit -m "feat(time): domain errors, timezone helpers, and NL date parsing"
 
 **Why `local_now` is passed in rather than computed:** `logic.py` stays pure and primitive-taking (spec §5.2). The scheduler owns the conversion.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_quiet_hours.py`:
 
@@ -1214,12 +1214,12 @@ def test_local_now_defaults_to_now_when_omitted():
     assert call(quiet_start=time(11, 0), quiet_end=time(13, 0)) == Action.NOTHING
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_quiet_hours.py -v`
 Expected: FAIL with `ImportError: cannot import name 'in_quiet_hours' from 'app.logic'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `app/logic.py`, change the imports to:
 
@@ -1273,12 +1273,12 @@ Extend `decide()`'s docstring with:
     this module stays pure.
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_quiet_hours.py tests/test_logic.py -v`
 Expected: all PASS — the existing `test_logic.py` tests pass unchanged because every new parameter defaults to disabled.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/logic.py tests/test_quiet_hours.py
@@ -1312,7 +1312,7 @@ git commit -m "feat(logic): quiet-hours short-circuit in decide()"
 
 The skip/clamp divergence between the two anchor modes is intended: `schedule` means "the 31st", `completion` means "a month after you did it".
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_recurrence.py`:
 
@@ -1504,12 +1504,12 @@ def test_completion_result_is_pushed_past_now_if_resolution_was_stale():
     ) > NOW
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_recurrence.py -v`
 Expected: FAIL with `ImportError: cannot import name 'parse_recurrence' from 'app.logic'`.
 
-- [ ] **Step 3: Implement the recurrence functions**
+- [x] **Step 3: Implement the recurrence functions**
 
 Add to the imports at the top of `app/logic.py`:
 
@@ -1646,17 +1646,17 @@ def next_occurrence(
     return from_local_naive(candidate, tz)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_recurrence.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Verify nothing regressed**
+- [x] **Step 5: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/logic.py tests/test_recurrence.py
@@ -1683,7 +1683,7 @@ git commit -m "feat(logic): whitelisted RRULE subset and next-occurrence computa
   - `MUTABLE_FIELDS: frozenset[str]`
 - The four existing helpers (`latest_notification`, `ack_reminder`, `find_reply_ack_target`, `record_send`) keep their current signatures and behaviour. `app/errors` names are re-exported from `app.service`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_service.py` — hoist the new `import` lines to the top of the file rather than leaving them mid-file:
 
@@ -1844,12 +1844,12 @@ def test_search_can_be_narrowed_by_status(session):
         ["bins now"]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_service.py -v`
 Expected: FAIL with `ImportError: cannot import name 'create_reminder' from 'app.service'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Replace the imports at the top of `app/service.py` with:
 
@@ -2034,17 +2034,17 @@ def search_reminders(
     return list(session.exec(statement).all())
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_service.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Verify nothing regressed**
+- [x] **Step 5: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS — the router still has its own inline copies at this point and is untouched.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/service.py tests/test_service.py
@@ -2063,7 +2063,7 @@ git commit -m "feat(service): CRUD, search, and validation in the business layer
 - Consumes: Task 6's `next_occurrence`, Task 7's `get_reminder`/`_require_pending`.
 - Produces: `complete_reminder(session, reminder_id, *, tz="UTC", now=None) -> Reminder`; `_roll_forward(session, reminder, *, outcome, resolved_at, tz)` (internal, does not commit); `ack_reminder` gains a `tz: str = "UTC"` keyword and now delegates to `complete_reminder`, so a Telegram ack rolls a series forward exactly like a dashboard or MCP completion.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_service.py`:
 
@@ -2176,12 +2176,12 @@ def test_ack_still_returns_false_instead_of_raising(session):
     assert ack_reminder(session, 999, now=NOW) is False
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_service.py -v`
 Expected: FAIL with `ImportError: cannot import name 'complete_reminder' from 'app.service'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `next_occurrence` to the `app.logic` import in `app/service.py`:
 
@@ -2292,17 +2292,17 @@ def ack_reminder(
     return True
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_service.py tests/test_bot.py -v`
 Expected: all PASS, including the pre-existing ack tests and all of `test_bot.py`.
 
-- [ ] **Step 5: Verify nothing regressed**
+- [x] **Step 5: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/service.py tests/test_service.py
@@ -2324,7 +2324,7 @@ git commit -m "feat(service): completion with recurring roll-forward, shared wit
   - `expire_reminder(session, reminder, *, tz="UTC", now) -> None` — **does not commit**, matching `record_send`, so the scheduler can resolve several reminders in one transaction.
   - `due_digest(session, *, window="today", tz="UTC", now=None) -> dict` returning `{"now": datetime, "horizon": datetime, "overdue": [...], "due_today": [...], "upcoming": [...]}`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_service.py`:
 
@@ -2462,12 +2462,12 @@ def test_digest_day_boundary_follows_the_configured_zone(session):
     assert digest["due_today"] == []
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_service.py -v`
 Expected: FAIL with `ImportError: cannot import name 'snooze_reminder' from 'app.service'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Update the imports in `app/service.py`:
 
@@ -2597,17 +2597,17 @@ def due_digest(
     }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_service.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Verify nothing regressed**
+- [x] **Step 5: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/service.py tests/test_service.py
@@ -2629,7 +2629,7 @@ git commit -m "feat(service): snooze, recurring expiry, and the due digest"
 
 **Note for the implementer:** every existing call site in `tests/test_scheduler.py` must gain `settings=settings` and take the `settings` fixture. That churn is deliberate — a default would let a caller silently run with the wrong timezone.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_scheduler.py`:
 
@@ -2758,16 +2758,16 @@ async def test_a_broken_recurrence_rule_does_not_abort_the_tick(db, settings):
 
 **Ordering note:** `broken_id` is inserted first, so it is processed (and rolled back) before `fine` is sent — which is exactly the interleaving the rollback caution in Step 4 is about. If the assertion on `fine` ever fails, that is the rollback discarding a same-tick send, not a flake.
 
-- [ ] **Step 2: Update the existing scheduler tests**
+- [x] **Step 2: Update the existing scheduler tests**
 
 Every existing `await tick(db, ...)` call in `tests/test_scheduler.py` gains `settings=settings`, and every test function that calls `tick` gains the `settings` fixture parameter. Every existing `build_scheduler(db, sender, N)` call becomes `build_scheduler(db, sender, replace(settings, tick_seconds=N))`.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_scheduler.py -v`
 Expected: FAIL with `TypeError: tick() got an unexpected keyword argument 'settings'`.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 In `app/scheduler.py`, update the imports:
 
@@ -2887,12 +2887,12 @@ In `app/main.py`'s `lifespan`, change the scheduler construction to:
     scheduler = build_scheduler(db, sender, settings)
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_scheduler.py -v && .venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/scheduler.py app/main.py tests/test_scheduler.py
@@ -2929,7 +2929,7 @@ git commit -m "feat(scheduler): honour quiet hours and roll recurring series for
 | `InvalidField` | 422 |
 | any other `ServiceError` | 400 |
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_api.py`:
 
@@ -3054,12 +3054,12 @@ def create(client, **overrides):
 
 (Keep whatever extra defaults the existing helper already sets; only make sure arbitrary keys can be passed through.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_api.py -v`
 Expected: FAIL — 404 on `/api/config` and on the complete/snooze endpoints.
 
-- [ ] **Step 3: Extend the schemas**
+- [x] **Step 3: Extend the schemas**
 
 In `app/schemas.py`, change `due_at` on `ReminderCreate` to a string and add the new fields:
 
@@ -3169,7 +3169,7 @@ Add `Completion` to the `app.models` import at the top of the file.
 
 **Times stay UTC ISO in the API.** The browser converts using the zone from `/api/config`; putting local times in the payload would make the API's meaning depend on server configuration.
 
-- [ ] **Step 4: Rewrite the router as a thin adapter**
+- [x] **Step 4: Rewrite the router as a thin adapter**
 
 Replace `app/routers/reminders.py` in full:
 
@@ -3333,7 +3333,7 @@ def delete_reminder(reminder_id: int, session: Session = Depends(get_session)):
     return Response(status_code=204)
 ```
 
-- [ ] **Step 5: Register the error handlers**
+- [x] **Step 5: Register the error handlers**
 
 Add to `app/main.py`:
 
@@ -3379,17 +3379,17 @@ and call it in `create_app()`, before `include_router`:
     app.include_router(reminders.router)
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_api.py -v`
 Expected: all PASS — the new tests **and** every pre-existing one, unchanged.
 
-- [ ] **Step 7: Verify nothing regressed**
+- [x] **Step 7: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/schemas.py app/routers/reminders.py app/main.py tests/test_api.py
@@ -3411,7 +3411,7 @@ git commit -m "feat(api): complete/snooze/config endpoints on the service layer"
 - Every tool result is a dict containing `timezone` and `server_time` (fresh local ISO) alongside its payload. `due_at`, `last_sent_at`, and completion times are rendered as **local ISO with offset** — absolute and unambiguous, and readable in the terms the user thinks in.
 - This module is the single MCP entry point and therefore the future auth seam (spec §4). Do not let MCP concerns leak into `service.py`.
 
-- [ ] **Step 1: Pin the dependency**
+- [x] **Step 1: Pin the dependency**
 
 Append to `requirements.txt`:
 
@@ -3422,7 +3422,7 @@ mcp>=2.0,<3.0
 Run: `.venv/bin/pip install -r requirements.txt`
 Expected: already satisfied (`mcp==2.0.0`).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `tests/test_mcp.py`:
 
@@ -3648,12 +3648,12 @@ async def test_whats_due_defaults_to_today(mcp, db):
     assert (await call(mcp, "whats_due"))["upcoming"] == []
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_mcp.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.mcp_server'`.
 
-- [ ] **Step 4: Implement the MCP server**
+- [x] **Step 4: Implement the MCP server**
 
 Create `app/mcp_server.py`:
 
@@ -3925,17 +3925,17 @@ def build_mcp(db: Database, settings: Settings) -> MCPServer:
     return mcp
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_mcp.py -v`
 Expected: all PASS. No HTTP is involved — `await mcp.call_tool(...)` exercises the tools directly.
 
-- [ ] **Step 6: Verify nothing regressed**
+- [x] **Step 6: Verify nothing regressed**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/mcp_server.py tests/test_mcp.py requirements.txt
@@ -3960,7 +3960,7 @@ git commit -m "feat(mcp): nine reminder tools over the service layer"
 2. `transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)` is **required**, or every request — including from `TestClient` and including the public Funnel — returns 421 "Invalid Host header".
 3. Register with `app.router.routes.append(Route("/mcp", endpoint=StreamableHTTPASGIApp(...)))`, **not** `app.mount("/mcp", ...)`. A `Mount` never matches the bare prefix and would 307-redirect `/mcp` to `/mcp/`. Omit `methods=` so every verb reaches the ASGI app. It must be registered before the `StaticFiles` mount.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_main.py`:
 
@@ -4008,12 +4008,12 @@ def test_mcp_can_be_disabled_by_configuration(db, monkeypatch):
 
 Check the existing imports at the top of `tests/test_main.py` and add `TestClient` / `create_app` only if they are not already there.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_main.py -v`
 Expected: FAIL — `/mcp` returns 404 from StaticFiles.
 
-- [ ] **Step 3: Implement the mount**
+- [x] **Step 3: Implement the mount**
 
 Add to `app/main.py`'s imports:
 
@@ -4080,12 +4080,12 @@ In `lifespan`, wrap the existing `yield` so the session manager runs for the app
         # (the rest of the existing finally block is unchanged)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_main.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Verify the whole suite and the real server**
+- [x] **Step 5: Verify the whole suite and the real server**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS.
@@ -4104,7 +4104,7 @@ kill %1
 
 Expected: `200`. A `307` means a `Mount` slipped in; a `421` means the transport-security setting is missing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/main.py tests/test_main.py
@@ -4125,7 +4125,7 @@ git commit -m "feat(mcp): mount the connector at /mcp with a lifespan-run sessio
 - Produces: `SNOOZE_PREFIX = "snooze:"`; `send_reminder_message(bot, chat_id, reminder, *, tz="UTC", snooze_min=15) -> int`; `handle_callback(update, context, *, db, settings)` and `handle_text(update, context, *, db, settings)` — **`chat_id` now comes from `settings.chat_id`**, so the handlers take one fewer argument; `build_application(settings, db) -> Application`.
 - Unchanged on purpose: dual-ack behaviour (inline button *and* bare text reply), and `find_reply_ack_target`'s "most recently nagged pending reminder" semantics.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_bot.py`:
 
@@ -4210,7 +4210,7 @@ async def test_done_button_on_a_recurring_reminder_rolls_it_forward(db, settings
 
 Reuse whatever `FakeBot`, `fake_callback_update`, `fake_context`, `fake_text_update`, and reminder-seeding helpers already exist in `tests/test_bot.py`; add `add_pending(db, **overrides)` only if there is no equivalent. Add the imports the new tests need (`timedelta`, `ReminderStatus`, `utcnow`).
 
-- [ ] **Step 2: Update the existing bot tests for the new handler signature**
+- [x] **Step 2: Update the existing bot tests for the new handler signature**
 
 In every existing call, replace `db=db, chat_id=CHAT_ID` with `db=db, settings=settings` and add the `settings` fixture to the test's parameters. Where a test needs the authorised chat id to be `CHAT_ID`, build it as `replace(settings, chat_id=CHAT_ID)`; the simplest way is a module-level fixture:
 
@@ -4222,12 +4222,12 @@ def settings(settings):
 
 Update `test_send_builds_a_message_with_a_done_button` — it now sees two buttons, so assert on `buttons[0]` rather than on the row's length.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_bot.py -v`
 Expected: FAIL with `ImportError: cannot import name 'SNOOZE_PREFIX' from 'app.bot'`.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 In `app/bot.py`, update the imports:
 
@@ -4411,12 +4411,12 @@ In `app/main.py`'s `lifespan`, update the two call sites:
         )
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_bot.py -v && .venv/bin/python -m pytest -q`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/bot.py app/main.py tests/test_bot.py
@@ -4440,7 +4440,7 @@ git commit -m "feat(telegram): snooze button, recurrence in the body, local time
 
 **Rule that stays:** `textContent`, never `innerHTML`, for anything user-supplied. It is why this app has never needed HTML escaping.
 
-- [ ] **Step 1: Extract and extend the stylesheet**
+- [x] **Step 1: Extract and extend the stylesheet**
 
 Create `static/style.css` with the current `<style>` block's contents, then apply these changes:
 
@@ -4547,7 +4547,7 @@ dialog li { display: flex; gap: .75rem; padding: .2rem 0; }
 dialog li kbd { min-width: 2rem; text-align: center; }
 ```
 
-- [ ] **Step 2: Rewrite the markup**
+- [x] **Step 2: Rewrite the markup**
 
 Replace `static/index.html` in full:
 
@@ -4658,7 +4658,7 @@ Replace `static/index.html` in full:
 
 **Note:** `due_at` is now a free-text input rather than `datetime-local`, because the server accepts natural language and a native picker cannot express "in 2 hours". Task 16 pre-fills it with a concrete resolved time so the default stays unambiguous.
 
-- [ ] **Step 3: Verify the shell loads**
+- [x] **Step 3: Verify the shell loads**
 
 Run:
 
@@ -4673,7 +4673,7 @@ kill %1
 
 Expected: `index 200`, `css 200`, and the existing static-file test still passing. The page will render unstyled-but-structured content and an empty list — `app.js` is still the old version and will log errors about missing elements. That is expected until Task 16.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add static/style.css static/index.html
@@ -4698,7 +4698,7 @@ git commit -m "feat(dashboard): grouped-view markup, extracted stylesheet, theme
 3. **Grouping day boundaries use the server timezone**, compared as `en-CA` date strings (`YYYY-MM-DD`) — exact, and it sidesteps every off-by-one that arithmetic on local `Date` objects invites.
 4. **`textContent` only.** No `innerHTML` anywhere a title, note, or recurrence rule can reach.
 
-- [ ] **Step 1: Rewrite the script**
+- [x] **Step 1: Rewrite the script**
 
 Replace `static/app.js` in full:
 
@@ -5147,12 +5147,12 @@ async function start() {
 start();
 ```
 
-- [ ] **Step 2: Syntax-check the script**
+- [x] **Step 2: Syntax-check the script**
 
 Run: `node --check static/app.js`
 Expected: no output (exit 0). A parse error here is the one class of dashboard bug that no backend test would catch.
 
-- [ ] **Step 3: Verify in a browser**
+- [x] **Step 3: Verify in a browser**
 
 ```bash
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8799
@@ -5160,21 +5160,21 @@ Expected: no output (exit 0). A parse error here is the one class of dashboard b
 
 Open `http://127.0.0.1:8799/` and confirm each of these, which map one-to-one onto spec §12:
 
-- [ ] Adding "test one" due "in 2 hours" succeeds, and the toast names the **resolved absolute time**.
-- [ ] An unparseable due time ("sometime soonish") shows the server's error in a red toast and does not create anything.
-- [ ] Adding one due "in 1 minute" with repeat "Every day" shows an `every day` badge on the card.
-- [ ] The list is split into **Overdue / Today / Upcoming**, and empty groups are hidden.
-- [ ] Each card shows a relative time ("in 2h") beside the absolute one.
-- [ ] **Done** on the recurring reminder keeps it pending and moves `due_at` forward one day.
-- [ ] **Done** on a one-shot reminder moves it to **Done & expired**.
-- [ ] **Snooze** pushes the time out by the configured default and the card shows `snoozed 1×`.
-- [ ] **Edit** loads the reminder into the form, the button reads "Save changes", and Cancel restores "Add reminder".
-- [ ] **Delete** removes the card immediately and shows an **Undo** toast; Undo restores the same card with the same id; leaving the toast alone makes the delete stick after ~6s.
-- [ ] `n` focuses the title, `/` focuses the filter, `?` opens the shortcuts dialog, `Esc` closes it.
-- [ ] Typing in the filter narrows the cards by title and note.
-- [ ] The ◐ button cycles OS preference → light → dark and the choice survives a reload.
+- [x] Adding "test one" due "in 2 hours" succeeds, and the toast names the **resolved absolute time**.
+- [x] An unparseable due time ("sometime soonish") shows the server's error in a red toast and does not create anything.
+- [x] Adding one due "in 1 minute" with repeat "Every day" shows an `every day` badge on the card.
+- [x] The list is split into **Overdue / Today / Upcoming**, and empty groups are hidden.
+- [x] Each card shows a relative time ("in 2h") beside the absolute one.
+- [x] **Done** on the recurring reminder keeps it pending and moves `due_at` forward one day.
+- [x] **Done** on a one-shot reminder moves it to **Done & expired**.
+- [x] **Snooze** pushes the time out by the configured default and the card shows `snoozed 1×`.
+- [x] **Edit** loads the reminder into the form, the button reads "Save changes", and Cancel restores "Add reminder".
+- [x] **Delete** removes the card immediately and shows an **Undo** toast; Undo restores the same card with the same id; leaving the toast alone makes the delete stick after ~6s.
+- [x] `n` focuses the title, `/` focuses the filter, `?` opens the shortcuts dialog, `Esc` closes it.
+- [x] Typing in the filter narrows the cards by title and note.
+- [x] The ◐ button cycles OS preference → light → dark and the choice survives a reload.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add static/app.js
@@ -5194,12 +5194,12 @@ git commit -m "feat(dashboard): complete/snooze/edit, grouped views, toasts, und
 - Consumes: everything.
 - Produces: a running CT 108 with the connector reachable, and a `~/.claude/projects/-home-redji/memory/reminder-service.md` that lets the next session start cold.
 
-- [ ] **Step 1: Confirm the full suite and record the real count**
+- [x] **Step 1: Confirm the full suite and record the real count**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: all PASS. Write the actual number into the README (spec §16 asks for the real count, not the ~130 estimate).
 
-- [ ] **Step 2: Update the README**
+- [x] **Step 2: Update the README**
 
 Add a **Configuration** section documenting every setting from Global Constraints, with its default and its effect, and note that all are optional and default to the pre-existing behaviour.
 
@@ -5260,7 +5260,7 @@ notifications. This is a deliberate choice for a single-user service on an
 unguessable hostname. Set `MCP_ENABLED=false` to drop the endpoint entirely.
 ```
 
-- [ ] **Step 3: Rebuild locally and smoke-test the container**
+- [x] **Step 3: Rebuild locally and smoke-test the container**
 
 ```bash
 cd ~/reminder-service
@@ -5277,7 +5277,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8765/mcp \
 
 Expected: `{"status":"ok"}`, a config JSON with `"timezone":"UTC"`, and `200` from `/mcp`. The logs must show the migration line and **must not** contain `BOT_TOKEN`.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 ```bash
 git add README.md .env.example requirements.txt
@@ -5285,7 +5285,7 @@ git commit -m "docs: recurrence, connector, and configuration reference"
 git push origin main
 ```
 
-- [ ] **Step 5: Back up production before deploying**
+- [x] **Step 5: Back up production before deploying**
 
 The migration is additive and idempotent, but it runs against live data on first boot. Take a copy first — it costs one command and it is the only thing standing between a bad migration and lost reminders.
 
@@ -5293,7 +5293,7 @@ The migration is additive and idempotent, but it runs against live data on first
 ssh root@192.168.1.206 'cd /opt/reminder-service && cp data/reminders.db data/reminders.db.pre-v1.bak && ls -la data/'
 ```
 
-- [ ] **Step 6: Deploy to CT 108**
+- [x] **Step 6: Deploy to CT 108**
 
 ```bash
 ssh root@192.168.1.206 'cd /opt/reminder-service && git pull && docker compose build && docker compose up -d --force-recreate'
@@ -5303,7 +5303,7 @@ ssh root@192.168.1.206 'cd /opt/reminder-service && docker compose logs --tail 4
 
 Expected in the logs: the migration line (`migrated schema from user_version 0 to 1`), `MCP connector mounted at /mcp`, `telegram bot polling`, and `scheduler started`. If startup aborted, the migration failed — restore `data/reminders.db.pre-v1.bak`, redeploy the previous image, and debug from the copy rather than from prod.
 
-- [ ] **Step 7: Verify the deployment (read-only calls only)**
+- [x] **Step 7: Verify the deployment (read-only calls only)**
 
 ```bash
 curl -s http://192.168.1.206:8765/api/healthz
@@ -5320,7 +5320,7 @@ Expected: healthz ok, config JSON, the pre-existing reminders listed **with thei
 
 **Read-only only.** A probe `PUT` on a live service has clobbered real credentials on this project before — do not issue mutating calls against prod to "check it works".
 
-- [ ] **Step 8: Hand the public check to the user**
+- [ ] **Step 8: Hand the public check to the user** (open — needs the user's phone on cell data)
 
 The public Funnel path **cannot be verified from this machine** — the intranet blocks `*.ts.net`, so every local request loops back over the tailnet and proves nothing about the public route. Ask the user to, from a phone on **cell data** (Wi-Fi off):
 
@@ -5329,7 +5329,7 @@ The public Funnel path **cannot be verified from this machine** — the intranet
 
 If the connector fails to add, the two known causes are a 421 (transport-security setting missing from Task 13) and a 307 (a `Mount` slipped in where a `Route` belongs).
 
-- [ ] **Step 9: Update the durable notes**
+- [x] **Step 9: Update the durable notes**
 
 Update `~/.claude/projects/-home-redji/memory/reminder-service.md`:
 
@@ -5338,7 +5338,7 @@ Update `~/.claude/projects/-home-redji/memory/reminder-service.md`:
 - Record the new settings and their defaults.
 - Note the prod backup path `data/reminders.db.pre-v1.bak` and that `user_version` is now `1`.
 
-- [ ] **Step 10: Final commit**
+- [x] **Step 10: Final commit**
 
 ```bash
 git add -A && git status
